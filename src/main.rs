@@ -34,6 +34,10 @@ struct Args {
     /// System prompt
     #[clap(long, env = "THEATER_CHAT_SYSTEM_PROMPT")]
     system_prompt: Option<String>,
+
+    /// Debug mode to print all responses
+    #[clap(long)]
+    debug: bool,
 }
 
 // Chat state actor manifest path
@@ -47,6 +51,9 @@ async fn main() -> Result<()> {
 
     // Parse command line arguments
     let args = Args::parse();
+    
+    // Force debug mode on to troubleshoot
+    let debug = true; // Override debug flag for troubleshooting
 
     // Parse server address
     let server_address: SocketAddr = args
@@ -63,21 +70,26 @@ async fn main() -> Result<()> {
 
     // Start the chat-state actor
     println!("{}", "Starting chat-state actor...".cyan());
-    let actor_id = start_chat_state_actor(&mut connection, &args)
-        .await
-        .context("Failed to start chat-state actor")?;
-    println!("{}", "Chat-state actor started".green());
+    match start_chat_state_actor(&mut connection, &args).await {
+        Ok(actor_id) => {
+            println!("{}", "Chat-state actor started".green());
 
-    // Print welcome message
-    println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
-    println!(
-        "{}",
-        "Type your messages (Ctrl+C to exit, /help for commands)".cyan()
-    );
-    println!();
+            // Print welcome message
+            println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
+            println!(
+                "{}",
+                "Type your messages (Ctrl+C to exit, /help for commands)".cyan()
+            );
+            println!();
 
-    // Enter REPL loop
-    run_chat_loop(&mut connection, &actor_id).await?;
+            // Enter REPL loop
+            run_chat_loop(&mut connection, &actor_id, debug).await?;
+        }
+        Err(e) => {
+            // Print a user-friendly error message with suggestions for fixing common issues
+            println!("  {}", e.to_string().red());
+        }
+    }
 
     Ok(())
 }
@@ -105,6 +117,11 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
     let initial_state_bytes =
         serde_json::to_vec(&initial_state).context("Failed to serialize initial state")?;
 
+    println!(
+        "Starting actor with manifest: {}",
+        CHAT_STATE_ACTOR_MANIFEST
+    );
+
     // Start the chat-state actor
     connection
         .send(ManagementCommand::StartActor {
@@ -119,10 +136,28 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
     // Get the actor ID from the response
     let actor_id = loop {
         let response = connection.receive().await?;
-        if let ManagementResponse::ActorStarted { id } = response {
-            break id.to_string();
+
+        if args.debug {
+            println!("DEBUG - Received response: {:?}", response);
+        }
+
+        match response {
+            ManagementResponse::ActorStarted { id } => {
+                break id.to_string();
+            }
+            ManagementResponse::Error { error } => {
+                return Err(anyhow::anyhow!("Theater error: {:?}", error));
+            }
+            _ => {
+                // Just log and continue waiting for the correct response
+                if args.debug {
+                    println!("Waiting for actor start, received: {:?}", response);
+                }
+            }
         }
     };
+
+    println!("Actor started with ID: {}", actor_id);
 
     // Configure the actor with model settings
     let settings = json!({
@@ -140,10 +175,15 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
         }
     });
 
+    println!("Configuring actor with settings...");
+
+    // Parse the actor ID to use in commands
+    let actor_id_parsed: TheaterId = actor_id.parse().context("Failed to parse actor ID")?;
+
     // Send settings to the actor
     connection
         .send(ManagementCommand::SendActorMessage {
-            id: actor_id.parse().context("Failed to parse actor ID")?,
+            id: actor_id_parsed,
             data: serde_json::to_vec(&settings).context("Failed to serialize settings")?,
         })
         .await
@@ -152,8 +192,27 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
     // Wait for the settings update acknowledgment
     loop {
         let response = connection.receive().await?;
-        if let ManagementResponse::SentMessage { .. } = response {
-            break;
+
+        if args.debug {
+            println!("DEBUG - Received response: {:?}", response);
+        }
+
+        match response {
+            ManagementResponse::SentMessage { .. } => {
+                break;
+            }
+            ManagementResponse::Error { error } => {
+                return Err(anyhow::anyhow!("Error sending settings: {:?}", error));
+            }
+            _ => {
+                // Just log and continue waiting for the correct response
+                if args.debug {
+                    println!(
+                        "Waiting for settings confirmation, received: {:?}",
+                        response
+                    );
+                }
+            }
         }
     }
 
@@ -161,10 +220,15 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
 }
 
 /// Run the chat loop
-async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Result<()> {
+async fn run_chat_loop(
+    connection: &mut TheaterConnection,
+    actor_id: &str,
+    debug: bool,
+) -> Result<()> {
     let term = Term::stdout();
     let user_style = Style::new().cyan().bold();
     let assistant_style = Style::new().green();
+    let debug_style = Style::new().yellow().dim();
 
     loop {
         // Get user input
@@ -213,6 +277,7 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
         let actor_id_parsed: TheaterId = actor_id.parse().context("Failed to parse actor ID")?;
 
         // Create and send message to actor
+        // The format should be a JSON object with the 'type' field as a tag
         let add_message_request = json!({
             "type": "add_message",
             "message": {
@@ -223,10 +288,28 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
                 }
             }
         });
+        
+        // Debug the raw JSON and bytes we're sending
+        if debug {
+            println!("Raw JSON request: {}", add_message_request);
+            let bytes = serde_json::to_vec(&add_message_request)
+                .context("Failed to serialize for debug")?;
+            println!("First 50 bytes: {:?}", &bytes[..std::cmp::min(50, bytes.len())]);
+        }
+
+        if debug {
+            println!(
+                "{}",
+                debug_style.apply_to(format!(
+                    "DEBUG - Sending message request: {}",
+                    add_message_request
+                ))
+            );
+        }
 
         // Send the message to the actor
         connection
-            .send(ManagementCommand::SendActorMessage {
+            .send(ManagementCommand::RequestActorMessage {
                 id: actor_id_parsed.clone(),
                 data: serde_json::to_vec(&add_message_request)
                     .context("Failed to serialize message request")?,
@@ -234,11 +317,38 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
             .await
             .context("Failed to send message to actor")?;
 
-        // Wait for the send confirmation
+        // Wait for the request response
         loop {
             let resp = connection.receive().await?;
-            if let ManagementResponse::SentMessage { .. } = resp {
-                break;
+
+            if debug {
+                println!(
+                    "{}",
+                    debug_style.apply_to(format!("DEBUG - Received response: {:?}", resp))
+                );
+            }
+
+            match resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    if debug {
+                        println!("RequestedMessage response: {}", String::from_utf8_lossy(&message));
+                    }
+                    break;
+                }
+                ManagementResponse::Error { error } => {
+                    println!("Error from actor: {:?}", error);
+                    // Provide detailed debugging information
+                    println!("Error details: {:?}", error);
+                    continue;
+                }
+                _ => {
+                    if debug {
+                        println!(
+                            "Unexpected response while waiting for message response: {:?}",
+                            resp
+                        );
+                    }
+                }
             }
         }
 
@@ -247,7 +357,7 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
         pb.set_style(
             ProgressStyle::default_spinner()
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-                .template("{spinner} Claude is thinking...")
+                .template("{spinner} Model is thinking...")
                 .unwrap(),
         );
         pb.enable_steady_tick(Duration::from_millis(100));
@@ -256,6 +366,16 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
         let generate_completion_request = json!({
             "type": "generate_completion"
         });
+
+        if debug {
+            println!(
+                "{}",
+                debug_style.apply_to(format!(
+                    "DEBUG - Sending completion request: {}",
+                    generate_completion_request
+                ))
+            );
+        }
 
         // Send the completion request to the actor
         connection
@@ -267,12 +387,74 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
             .await
             .context("Failed to send completion request to actor")?;
 
-        // Wait for the completion response
-        let head_message_id = match handle_completion_response(connection).await {
-            Ok(id) => id,
-            Err(e) => {
+        // Wait for the completion response and print everything we get
+        let mut head_message_id = None;
+        let mut error_occurred = false;
+
+        loop {
+            let resp = connection.receive().await?;
+
+            if debug {
+                println!(
+                    "{}",
+                    debug_style
+                        .apply_to(format!("DEBUG - Received completion response: {:?}", resp))
+                );
+            }
+
+            match &resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    match serde_json::from_slice::<serde_json::Value>(message) {
+                        Ok(response_value) => {
+                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str())
+                            {
+                                head_message_id = Some(head.to_string());
+                                break;
+                            } else if let Some(error) = response_value.get("error") {
+                                pb.finish_and_clear();
+                                println!("Error from actor: {}", error);
+                                error_occurred = true;
+                                break;
+                            } else {
+                                if debug {
+                                    println!("Full response: {}", response_value);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            pb.finish_and_clear();
+                            println!("Error parsing completion response: {}", e);
+                            println!("Raw response: {}", String::from_utf8_lossy(message));
+                            error_occurred = true;
+                            break;
+                        }
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    pb.finish_and_clear();
+                    println!("Error from actor: {:?}", error);
+                    error_occurred = true;
+                    break;
+                }
+                _ => {
+                    // Just print and continue
+                    if debug {
+                        println!("Unexpected response: {:?}", resp);
+                    }
+                }
+            }
+        }
+
+        if error_occurred {
+            continue;
+        }
+
+        // If we didn't get a head message ID, continue to next input
+        let head_message_id = match head_message_id {
+            Some(id) => id,
+            None => {
                 pb.finish_and_clear();
-                println!("{}: {}", "Error getting completion".red(), e);
+                println!("{}", "Failed to get head message ID".red());
                 continue;
             }
         };
@@ -282,6 +464,16 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
             "type": "get_message",
             "message_id": head_message_id
         });
+
+        if debug {
+            println!(
+                "{}",
+                debug_style.apply_to(format!(
+                    "DEBUG - Sending message request: {}",
+                    message_request
+                ))
+            );
+        }
 
         // Send the message request to the actor
         connection
@@ -294,76 +486,92 @@ async fn run_chat_loop(connection: &mut TheaterConnection, actor_id: &str) -> Re
             .context("Failed to send message request to actor")?;
 
         // Wait for the message response
-        let response_msg = match handle_message_response(connection).await {
-            Ok(msg) => msg,
-            Err(e) => {
-                pb.finish_and_clear();
-                println!("{}: {}", "Error getting message".red(), e);
-                continue;
+        let mut assistant_response: Option<String> = None;
+        let mut error_received = false;
+
+        while !error_received && assistant_response.is_none() {
+            let resp = connection.receive().await?;
+
+            if debug {
+                println!(
+                    "{}",
+                    debug_style.apply_to(format!("DEBUG - Received message response: {:?}", resp))
+                );
             }
-        };
+
+            match &resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    match serde_json::from_slice::<serde_json::Value>(message) {
+                        Ok(response_value) => {
+                            if let Some(message_obj) =
+                                response_value.get("message").and_then(|m| m.get("message"))
+                            {
+                                if let Some(content) = message_obj.get("content") {
+                                    if let Some(data) = content.get("data") {
+                                        if let Some(text) = data.as_str() {
+                                            assistant_response = Some(text.to_string());
+                                        } else {
+                                            println!("Non-string data: {:?}", data);
+                                        }
+                                    } else {
+                                        println!("No data field in content: {:?}", content);
+                                    }
+                                } else {
+                                    println!("No content field in message: {:?}", message_obj);
+                                }
+                            } else if let Some(error) = response_value.get("error") {
+                                pb.finish_and_clear();
+                                println!("Error in response: {}", error);
+                                error_received = true;
+                            } else {
+                                // Print the full response for debugging
+                                if debug {
+                                    println!("Unexpected response format: {}", response_value);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            pb.finish_and_clear();
+                            println!("Error parsing message response: {}", e);
+                            println!("Raw response: {}", String::from_utf8_lossy(message));
+                            error_received = true;
+                        }
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    pb.finish_and_clear();
+                    println!("Error from actor: {:?}", error);
+                    error_received = true;
+                }
+                _ => {
+                    // Just print and continue
+                    if debug {
+                        println!("Unexpected response: {:?}", resp);
+                    }
+                }
+            }
+        }
 
         // Stop the progress bar
         pb.finish_and_clear();
 
-        // Parse and display the assistant's response
-        let response_value: serde_json::Value =
-            serde_json::from_slice(&response_msg).context("Failed to parse message response")?;
+        if error_received {
+            continue;
+        }
 
-        if let Some(message) = response_value.get("message").and_then(|m| m.get("message")) {
-            let response_str = if let Some(content) = message.get("content") {
-                if let Some(data) = content.get("data") {
-                    if let Some(text) = data.as_str() {
-                        text.to_string()
-                    } else {
-                        "Error: Could not parse assistant response text".to_string()
-                    }
-                } else {
-                    "Error: Could not parse content data".to_string()
-                }
-            } else {
-                "Error: Could not find content in message".to_string()
-            };
-
-            // Print the assistant's response
+        // Print the assistant's response
+        if let Some(response_text) = assistant_response {
             term.write_str("\n")?;
-            term.write_str(&format!("{} ", assistant_style.apply_to("Claude:")))?;
-            term.write_str(&response_str)?;
+            term.write_str(&format!("{} ", assistant_style.apply_to("Assistant:")))?;
+            term.write_str(&response_text)?;
             term.write_str("\n\n")?;
         } else {
             term.write_str("\n")?;
-            term.write_str(&format!("{} ", assistant_style.apply_to("Claude:")))?;
+            term.write_str(&format!("{} ", assistant_style.apply_to("Assistant:")))?;
             term.write_str("Sorry, I couldn't generate a response.")?;
             term.write_str("\n\n")?;
         }
     }
 
     Ok(())
-}
-
-/// Helper function to handle completion response
-async fn handle_completion_response(connection: &mut TheaterConnection) -> Result<String> {
-    loop {
-        let resp = connection.receive().await?;
-        if let ManagementResponse::RequestedMessage { message, .. } = resp {
-            let response_value: serde_json::Value =
-                serde_json::from_slice(&message).context("Failed to parse completion response")?;
-
-            if let Some(head) = response_value.get("head").and_then(|h| h.as_str()) {
-                return Ok(head.to_string());
-            } else {
-                return Err(anyhow::anyhow!("Could not extract head message ID"));
-            }
-        }
-    }
-}
-
-/// Helper function to handle message response
-async fn handle_message_response(connection: &mut TheaterConnection) -> Result<Vec<u8>> {
-    loop {
-        let resp = connection.receive().await?;
-        if let ManagementResponse::RequestedMessage { message, .. } = resp {
-            return Ok(message);
-        }
-    }
 }
