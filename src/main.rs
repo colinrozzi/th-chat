@@ -32,13 +32,29 @@ struct Args {
     #[clap(long, env = "THEATER_CHAT_PROVIDER", default_value = "google")]
     provider: String,
 
+    /// Temperature setting (0.0 to 1.0)
+    #[clap(long, env = "THEATER_CHAT_TEMPERATURE")]
+    temperature: Option<f32>,
+
+    /// Maximum tokens to generate
+    #[clap(long, env = "THEATER_CHAT_MAX_TOKENS", default_value = "65535")]
+    max_tokens: u32,
+
     /// System prompt
     #[clap(long, env = "THEATER_CHAT_SYSTEM_PROMPT")]
     system_prompt: Option<String>,
 
+    /// Conversation title
+    #[clap(long, env = "THEATER_CHAT_TITLE", default_value = "CLI Chat")]
+    title: String,
+
     /// Debug mode to print all responses
     #[clap(long, default_value = "false")]
     debug: bool,
+
+    /// Directories allowed for fs-mcp-server (comma-separated)
+    #[clap(long, env = "THEATER_CHAT_ALLOWED_DIRS")]
+    allowed_dirs: Option<String>,
 }
 
 // Chat state actor manifest path
@@ -76,12 +92,16 @@ async fn main() -> Result<()> {
             println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
             println!(
                 "{}",
+                format!("Using {} via {}", args.model.to_string().yellow().bold(), args.provider.yellow().bold())
+            );
+            println!(
+                "{}",
                 "Type your messages (Ctrl+C to exit, /help for commands)".cyan()
             );
             println!();
 
             // Enter REPL loop
-            run_chat_loop(&mut connection, &actor_id, args.debug).await?;
+            run_chat_loop(&mut connection, &actor_id, &args).await?;
         }
         Err(e) => {
             // Print a user-friendly error message with suggestions for fixing common issues
@@ -101,6 +121,16 @@ async fn connect_to_theater(address: SocketAddr) -> Result<TheaterConnection> {
 
 /// Start the chat-state actor
 async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args) -> Result<String> {
+    // Get current directory for MCP server allowed dirs if not specified
+    let allowed_dirs = match &args.allowed_dirs {
+        Some(dirs) => dirs.clone(),
+        None => {
+            let current_dir = std::env::current_dir()
+                .context("Failed to get current directory")?;
+            current_dir.to_string_lossy().to_string()
+        }
+    };
+
     // Prepare the initial state for the chat-state actor
     let initial_state = json!({
         "conversation_id": uuid::Uuid::new_v4().to_string(),
@@ -110,11 +140,23 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
                 "model": args.model.clone(),
                 "provider": args.provider.clone(),
             },
-            "temperature": null,
-            "max_tokens": 65535,
+            "temperature": args.temperature,
+            "max_tokens": args.max_tokens,
             "system_prompt": args.system_prompt.clone(),
-            "title": "CLI Chat",
-            "mcp_servers": []
+            "title": args.title.clone(),
+            "mcp_servers": [
+                {
+                    "config": {
+                        "command": "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server",
+                        "args": [
+                            "--allowed-dirs",
+                            allowed_dirs
+                        ]
+                    },
+                    "actor_id": null,
+                    "tools": null
+                }
+            ]
         }
     });
 
@@ -176,11 +218,23 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
                 "model": args.model.clone(),
                 "provider": args.provider.clone(),
             },
-            "temperature": null,
-            "max_tokens": 65535,
+            "temperature": args.temperature,
+            "max_tokens": args.max_tokens,
             "system_prompt": args.system_prompt.clone(),
-            "title": "CLI Chat",
-            "mcp_servers": []
+            "title": args.title.clone(),
+            "mcp_servers": [
+                {
+                    "config": {
+                        "command": "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server",
+                        "args": [
+                            "--allowed-dirs",
+                            allowed_dirs
+                        ]
+                    },
+                    "actor_id": null,
+                    "tools": null
+                }
+            ]
         }
     });
 
@@ -232,7 +286,7 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
 async fn run_chat_loop(
     connection: &mut TheaterConnection,
     actor_id: &str,
-    debug: bool,
+    args: &Args,
 ) -> Result<()> {
     let term = Term::stdout();
     let user_style = Style::new().cyan().bold();
@@ -264,6 +318,30 @@ async fn run_chat_loop(
                     println!("  {} - Exit the program", "/exit".cyan());
                     println!("  {} - Clear the screen", "/clear".cyan());
                     println!("  {} - Show this help message", "/help".cyan());
+                    println!();
+                    
+                    println!("\nCurrent settings:");
+                    println!("  Model: {}", args.model.green());
+                    println!("  Provider: {}", args.provider.green());
+                    if let Some(temp) = args.temperature {
+                        println!("  Temperature: {}", temp.to_string().green());
+                    } else {
+                        println!("  Temperature: {}", "default".green());
+                    }
+                    println!("  Max Tokens: {}", args.max_tokens.to_string().green());
+                    if let Some(ref prompt) = args.system_prompt {
+                        println!("  System Prompt: {}", prompt.green());
+                    }
+                    println!("  Title: {}", args.title.green());
+                    
+                    // Display allowed directories
+                    if let Some(ref dirs) = args.allowed_dirs {
+                        println!("  Allowed Directories: {}", dirs.green());
+                    } else {
+                        let current_dir = std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        println!("  Allowed Directories: {}", current_dir.to_string_lossy().green());
+                    }
                     println!();
                     continue;
                 }
@@ -300,7 +378,7 @@ async fn run_chat_loop(
         });
 
         // Debug the raw JSON and bytes we're sending
-        if debug {
+        if args.debug {
             println!("Raw JSON request: {}", add_message_request);
             let bytes = serde_json::to_vec(&add_message_request)
                 .context("Failed to serialize for debug")?;
@@ -310,7 +388,7 @@ async fn run_chat_loop(
             );
         }
 
-        if debug {
+        if args.debug {
             println!(
                 "{}",
                 debug_style.apply_to(format!(
@@ -334,7 +412,7 @@ async fn run_chat_loop(
         loop {
             let resp = connection.receive().await?;
 
-            if debug {
+            if args.debug {
                 println!(
                     "{}",
                     debug_style.apply_to(format!("DEBUG - Received response: {:?}", resp))
@@ -343,7 +421,7 @@ async fn run_chat_loop(
 
             match resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
-                    if debug {
+                    if args.debug {
                         println!(
                             "RequestedMessage response: {}",
                             String::from_utf8_lossy(&message)
@@ -358,7 +436,7 @@ async fn run_chat_loop(
                     continue;
                 }
                 _ => {
-                    if debug {
+                    if args.debug {
                         println!(
                             "Unexpected response while waiting for message response: {:?}",
                             resp
@@ -383,7 +461,7 @@ async fn run_chat_loop(
             "type": "generate_completion"
         });
 
-        if debug {
+        if args.debug {
             println!(
                 "{}",
                 debug_style.apply_to(format!(
@@ -410,7 +488,7 @@ async fn run_chat_loop(
         loop {
             let resp = connection.receive().await?;
 
-            if debug {
+            if args.debug {
                 println!(
                     "{}",
                     debug_style
@@ -432,7 +510,7 @@ async fn run_chat_loop(
                                 error_occurred = true;
                                 break;
                             } else {
-                                if debug {
+                                if args.debug {
                                     println!("Full response: {}", response_value);
                                 }
                             }
@@ -454,7 +532,7 @@ async fn run_chat_loop(
                 }
                 _ => {
                     // Just print and continue
-                    if debug {
+                    if args.debug {
                         println!("Unexpected response: {:?}", resp);
                     }
                 }
@@ -481,7 +559,7 @@ async fn run_chat_loop(
             "message_id": head_message_id
         });
 
-        if debug {
+        if args.debug {
             println!(
                 "{}",
                 debug_style.apply_to(format!(
@@ -508,7 +586,7 @@ async fn run_chat_loop(
         while !error_received && assistant_response.is_none() {
             let resp = connection.receive().await?;
 
-            if debug {
+            if args.debug {
                 println!(
                     "{}",
                     debug_style.apply_to(format!("DEBUG - Received message response: {:?}", resp))
@@ -564,7 +642,7 @@ async fn run_chat_loop(
                                 error_received = true;
                             } else {
                                 // Print the full response for debugging
-                                if debug {
+                                if args.debug {
                                     println!("Unexpected response format: {}", response_value);
                                 }
                             }
@@ -584,7 +662,7 @@ async fn run_chat_loop(
                 }
                 _ => {
                     // Just print and continue
-                    if debug {
+                    if args.debug {
                         println!("Unexpected response: {:?}", resp);
                     }
                 }
