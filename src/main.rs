@@ -24,12 +24,12 @@ struct Args {
     #[clap(
         long,
         env = "THEATER_CHAT_MODEL",
-        default_value = "claude-3-5-sonnet-20240307"
+        default_value = "gemini-2.5-flash-preview-04-17"
     )]
     model: String,
 
     /// Provider to use
-    #[clap(long, env = "THEATER_CHAT_PROVIDER", default_value = "anthropic")]
+    #[clap(long, env = "THEATER_CHAT_PROVIDER", default_value = "google")]
     provider: String,
 
     /// System prompt
@@ -105,6 +105,17 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
     let initial_state = json!({
         "conversation_id": uuid::Uuid::new_v4().to_string(),
         "store_id": null, // Let the actor create a new store
+        "config": {
+            "model_config": {
+                "model": args.model.clone(),
+                "provider": args.provider.clone(),
+            },
+            "temperature": null,
+            "max_tokens": 65535,
+            "system_prompt": args.system_prompt.clone(),
+            "title": "CLI Chat",
+            "mcp_servers": []
+        }
     });
 
     // Read the chat-state actor manifest
@@ -519,7 +530,7 @@ async fn run_chat_loop(
                                         for content_part in content.as_array().unwrap() {
                                             if let (Some(content_type), Some(text)) = (
                                                 content_part.get("type").and_then(|t| t.as_str()),
-                                                content_part.get("text").and_then(|t| t.as_str())
+                                                content_part.get("text").and_then(|t| t.as_str()),
                                             ) {
                                                 if content_type == "text" {
                                                     full_text.push_str(text);
@@ -538,7 +549,10 @@ async fn run_chat_loop(
                                                 println!("Non-string data: {:?}", data);
                                             }
                                         } else {
-                                            println!("Unrecognized content structure: {:?}", content);
+                                            println!(
+                                                "Unrecognized content structure: {:?}",
+                                                content
+                                            );
                                         }
                                     }
                                 } else {
