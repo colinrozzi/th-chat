@@ -512,14 +512,34 @@ async fn run_chat_loop(
                                 response_value.get("message").and_then(|m| m.get("message"))
                             {
                                 if let Some(content) = message_obj.get("content") {
-                                    if let Some(data) = content.get("data") {
-                                        if let Some(text) = data.as_str() {
-                                            assistant_response = Some(text.to_string());
-                                        } else {
-                                            println!("Non-string data: {:?}", data);
+                                    // Check if content is an array (new structure)
+                                    if content.is_array() {
+                                        // Extract text from the first text element in the array
+                                        let mut full_text = String::new();
+                                        for content_part in content.as_array().unwrap() {
+                                            if let (Some(content_type), Some(text)) = (
+                                                content_part.get("type").and_then(|t| t.as_str()),
+                                                content_part.get("text").and_then(|t| t.as_str())
+                                            ) {
+                                                if content_type == "text" {
+                                                    full_text.push_str(text);
+                                                }
+                                            }
+                                        }
+                                        if !full_text.is_empty() {
+                                            assistant_response = Some(full_text);
                                         }
                                     } else {
-                                        println!("No data field in content: {:?}", content);
+                                        // Try the old structure as fallback
+                                        if let Some(data) = content.get("data") {
+                                            if let Some(text) = data.as_str() {
+                                                assistant_response = Some(text.to_string());
+                                            } else {
+                                                println!("Non-string data: {:?}", data);
+                                            }
+                                        } else {
+                                            println!("Unrecognized content structure: {:?}", content);
+                                        }
                                     }
                                 } else {
                                     println!("No content field in message: {:?}", message_obj);
