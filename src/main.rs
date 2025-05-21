@@ -52,14 +52,27 @@ struct Args {
     #[clap(long, default_value = "false")]
     debug: bool,
 
-    /// Directories allowed for fs-mcp-server (comma-separated)
-    #[clap(long, env = "THEATER_CHAT_ALLOWED_DIRS")]
-    allowed_dirs: Option<String>,
+    /// Path to MCP servers configuration file (JSON)
+    #[clap(long, env = "THEATER_CHAT_MCP_CONFIG")]
+    mcp_config: Option<String>,
 }
 
 // Chat state actor manifest path
 const CHAT_STATE_ACTOR_MANIFEST: &str =
     "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";
+
+/// Read and parse the MCP servers configuration file
+fn read_mcp_config(path: &str) -> Result<Vec<serde_json::Value>> {
+    // Read the file
+    let config_content = std::fs::read_to_string(path)
+        .context(format!("Failed to read MCP config file: {}", path))?;
+
+    // Parse as JSON
+    let config: Vec<serde_json::Value> = serde_json::from_str(&config_content)
+        .context(format!("Failed to parse MCP config file as JSON: {}", path))?;
+
+    Ok(config)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -92,7 +105,11 @@ async fn main() -> Result<()> {
             println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
             println!(
                 "{}",
-                format!("Using {} via {}", args.model.to_string().yellow().bold(), args.provider.yellow().bold())
+                format!(
+                    "Using {} via {}",
+                    args.model.to_string().yellow().bold(),
+                    args.provider.yellow().bold()
+                )
             );
             println!(
                 "{}",
@@ -121,14 +138,28 @@ async fn connect_to_theater(address: SocketAddr) -> Result<TheaterConnection> {
 
 /// Start the chat-state actor
 async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args) -> Result<String> {
-    // Get current directory for MCP server allowed dirs if not specified
-    let allowed_dirs = match &args.allowed_dirs {
-        Some(dirs) => dirs.clone(),
-        None => {
-            let current_dir = std::env::current_dir()
-                .context("Failed to get current directory")?;
-            current_dir.to_string_lossy().to_string()
+    // Get MCP servers configuration
+    let mcp_servers = if let Some(ref config_path) = args.mcp_config {
+        // Read from config file
+        println!("Reading MCP config from: {}", config_path);
+        match read_mcp_config(config_path) {
+            Ok(config) => {
+                println!(
+                    "Successfully loaded MCP config with {} server(s)",
+                    config.len()
+                );
+                serde_json::to_value(config).unwrap_or_else(|_| json!([]))
+            }
+            Err(e) => {
+                println!("Warning: Failed to load MCP config: {}", e);
+                println!("Falling back to default configuration");
+                json!([])
+            }
         }
+    } else {
+        // Use default configuration
+        println!("Using default MCP configuration");
+        json!([])
     };
 
     // Prepare the initial state for the chat-state actor
@@ -144,19 +175,7 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
             "max_tokens": args.max_tokens,
             "system_prompt": args.system_prompt.clone(),
             "title": args.title.clone(),
-            "mcp_servers": [
-                {
-                    "config": {
-                        "command": "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server",
-                        "args": [
-                            "--allowed-dirs",
-                            allowed_dirs
-                        ]
-                    },
-                    "actor_id": null,
-                    "tools": null
-                }
-            ]
+            "mcp_servers": mcp_servers
         }
     });
 
@@ -222,19 +241,7 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
             "max_tokens": args.max_tokens,
             "system_prompt": args.system_prompt.clone(),
             "title": args.title.clone(),
-            "mcp_servers": [
-                {
-                    "config": {
-                        "command": "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server",
-                        "args": [
-                            "--allowed-dirs",
-                            allowed_dirs
-                        ]
-                    },
-                    "actor_id": null,
-                    "tools": null
-                }
-            ]
+            "mcp_servers": mcp_servers
         }
     });
 
@@ -319,7 +326,7 @@ async fn run_chat_loop(
                     println!("  {} - Clear the screen", "/clear".cyan());
                     println!("  {} - Show this help message", "/help".cyan());
                     println!();
-                    
+
                     println!("\nCurrent settings:");
                     println!("  Model: {}", args.model.green());
                     println!("  Provider: {}", args.provider.green());
@@ -333,14 +340,12 @@ async fn run_chat_loop(
                         println!("  System Prompt: {}", prompt.green());
                     }
                     println!("  Title: {}", args.title.green());
-                    
-                    // Display allowed directories
-                    if let Some(ref dirs) = args.allowed_dirs {
-                        println!("  Allowed Directories: {}", dirs.green());
+
+                    // Display MCP config file if used
+                    if let Some(ref config_path) = args.mcp_config {
+                        println!("  MCP Config File: {}", config_path.green());
                     } else {
-                        let current_dir = std::env::current_dir()
-                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                        println!("  Allowed Directories: {}", current_dir.to_string_lossy().green());
+                        println!("  MCP Config: {}", "Using default configuration".yellow());
                     }
                     println!();
                     continue;
