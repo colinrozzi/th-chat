@@ -17,5 +17,8 @@ uuid = { version = "1.6", features = ["v4"] }
 indicatif = "0.17.7"
 console = "0.15.7"
 
+# Dependencies for message types
+genai-types = { path = "/Users/colinrozzi/work/genai-types" }
+
 # Local dependency on theater
 theater = { path = "/Users/colinrozzi/work/theater" }

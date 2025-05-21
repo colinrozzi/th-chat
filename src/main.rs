@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
 use console::{Style, Term};
+use genai_types::{messages::Role, Message, MessageContent};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::json;
 use std::io::{self};
@@ -36,7 +37,7 @@ struct Args {
     system_prompt: Option<String>,
 
     /// Debug mode to print all responses
-    #[clap(long)]
+    #[clap(long, default_value = "false")]
     debug: bool,
 }
 
@@ -51,9 +52,6 @@ async fn main() -> Result<()> {
 
     // Parse command line arguments
     let args = Args::parse();
-    
-    // Force debug mode on to troubleshoot
-    let debug = true; // Override debug flag for troubleshooting
 
     // Parse server address
     let server_address: SocketAddr = args
@@ -83,7 +81,7 @@ async fn main() -> Result<()> {
             println!();
 
             // Enter REPL loop
-            run_chat_loop(&mut connection, &actor_id, debug).await?;
+            run_chat_loop(&mut connection, &actor_id, args.debug).await?;
         }
         Err(e) => {
             // Print a user-friendly error message with suggestions for fixing common issues
@@ -276,25 +274,29 @@ async fn run_chat_loop(
         // Parse actor ID
         let actor_id_parsed: TheaterId = actor_id.parse().context("Failed to parse actor ID")?;
 
+        // Create a proper Message using the genai_types structs
+        let message = Message {
+            role: Role::User,
+            content: vec![MessageContent::Text {
+                text: input.to_string(),
+            }],
+        };
+
         // Create and send message to actor
-        // The format should be a JSON object with the 'type' field as a tag
         let add_message_request = json!({
             "type": "add_message",
-            "message": {
-                "role": "user",
-                "content": {
-                    "format": null,
-                    "data": input
-                }
-            }
+            "message": message
         });
-        
+
         // Debug the raw JSON and bytes we're sending
         if debug {
             println!("Raw JSON request: {}", add_message_request);
             let bytes = serde_json::to_vec(&add_message_request)
                 .context("Failed to serialize for debug")?;
-            println!("First 50 bytes: {:?}", &bytes[..std::cmp::min(50, bytes.len())]);
+            println!(
+                "First 50 bytes: {:?}",
+                &bytes[..std::cmp::min(50, bytes.len())]
+            );
         }
 
         if debug {
@@ -331,7 +333,10 @@ async fn run_chat_loop(
             match resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
                     if debug {
-                        println!("RequestedMessage response: {}", String::from_utf8_lossy(&message));
+                        println!(
+                            "RequestedMessage response: {}",
+                            String::from_utf8_lossy(&message)
+                        );
                     }
                     break;
                 }
