@@ -1,0 +1,50 @@
+use clap::Parser;
+
+/// Command line arguments
+#[derive(Parser, Debug, Clone)]
+#[clap(author, version, about)]
+pub struct Args {
+    /// Address of the Theater server
+    #[clap(long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
+    pub server: String,
+
+    /// Model to use
+    #[clap(
+        long,
+        env = "THEATER_CHAT_MODEL",
+        default_value = "gemini-2.5-flash-preview-04-17"
+    )]
+    pub model: String,
+
+    /// Provider to use
+    #[clap(long, env = "THEATER_CHAT_PROVIDER", default_value = "google")]
+    pub provider: String,
+
+    /// Temperature setting (0.0 to 1.0)
+    #[clap(long, env = "THEATER_CHAT_TEMPERATURE")]
+    pub temperature: Option<f32>,
+
+    /// Maximum tokens to generate
+    #[clap(long, env = "THEATER_CHAT_MAX_TOKENS", default_value = "65535")]
+    pub max_tokens: u32,
+
+    /// System prompt
+    #[clap(long, env = "THEATER_CHAT_SYSTEM_PROMPT")]
+    pub system_prompt: Option<String>,
+
+    /// Conversation title
+    #[clap(long, env = "THEATER_CHAT_TITLE", default_value = "CLI Chat")]
+    pub title: String,
+
+    /// Debug mode to print all responses
+    #[clap(long, default_value = "false")]
+    pub debug: bool,
+
+    /// Path to MCP servers configuration file (JSON)
+    #[clap(long, env = "THEATER_CHAT_MCP_CONFIG")]
+    pub mcp_config: Option<String>,
+}
+
+// Chat state actor manifest path
+pub const CHAT_STATE_ACTOR_MANIFEST: &str =
+    "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";
