@@ -8,6 +8,8 @@ use theater::client::TheaterConnection;
 use theater::id::TheaterId;
 use theater::theater_server::{ManagementCommand, ManagementResponse};
 use tokio::sync::Mutex;
+use tracing::{info, error, debug, warn};
+
 
 use crate::config::{Args, CHAT_STATE_ACTOR_MANIFEST};
 
@@ -30,49 +32,91 @@ pub struct ChatManager {
 impl ChatManager {
     /// Create a new chat manager and initialize the connection
     pub async fn new(args: &Args) -> Result<Self> {
+        info!("Creating new ChatManager");
+        debug!("Args: {:?}", args);
+        
         // Connect to Theater server
+        info!("Parsing server address: {}", args.server);
         let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
+        debug!("Parsed server address: {:?}", server_addr);
+        
+        info!("Creating Theater connection to {}", server_addr);
         let mut connection = TheaterConnection::new(server_addr);
+        
+        info!("Attempting to connect to Theater server...");
         connection.connect().await
             .context("Failed to connect to Theater server")?;
+        info!("Successfully connected to Theater server");
 
         // Load MCP configuration
+        info!("Loading MCP configuration...");
         let mcp_config = if let Some(ref config_path) = args.mcp_config {
-            Some(read_mcp_config(config_path)?)
+            info!("Using custom MCP config path: {}", config_path);
+            match read_mcp_config(config_path) {
+                Ok(config) => {
+                    info!("Successfully loaded custom MCP config");
+                    debug!("MCP config: {:?}", config);
+                    Some(config)
+                },
+                Err(e) => {
+                    warn!("Failed to load custom MCP config: {:?}, continuing without MCP", e);
+                    None
+                }
+            }
         } else {
-            // Use default configuration
-            Some(read_mcp_config("mcp-config.json")?)
+            info!("Using default MCP config: mcp-config.json");
+            match read_mcp_config("mcp-config.json") {
+                Ok(config) => {
+                    info!("Successfully loaded default MCP config");
+                    debug!("MCP config: {:?}", config);
+                    Some(config)
+                },
+                Err(e) => {
+                    warn!("Failed to load default MCP config: {:?}, continuing without MCP", e);
+                    None
+                }
+            }
         };
 
         // Start chat-state actor
+        info!("Starting chat-state actor with manifest: {}", CHAT_STATE_ACTOR_MANIFEST);
         let start_actor_cmd = ManagementCommand::StartActor {
             manifest: CHAT_STATE_ACTOR_MANIFEST.to_string(),
             initial_state: None,
             parent: false,
             subscribe: false,
         };
+        debug!("StartActor command: {:?}", start_actor_cmd);
 
+        info!("Sending StartActor command...");
         connection.send(start_actor_cmd).await
             .context("Failed to send StartActor command")?;
+        info!("StartActor command sent successfully");
 
         // Get the actor ID from the response
+        info!("Waiting for actor start response...");
         let actor_id = loop {
+            debug!("Waiting for response from Theater server...");
             let response = connection.receive().await?;
+            debug!("Received response: {:?}", response);
 
             match response {
                 ManagementResponse::ActorStarted { id } => {
+                    info!("Actor started successfully with ID: {}", id);
                     break id.to_string();
                 }
                 ManagementResponse::Error { error } => {
+                    error!("Failed to start actor: {:?}", error);
                     return Err(anyhow::anyhow!("Failed to start actor: {:?}", error));
                 }
                 _ => {
-                    // Continue waiting for the correct response
+                    debug!("Received unexpected response, continuing to wait...");
                 }
             }
         };
 
         // Configure the actor with settings
+        info!("Configuring actor with settings...");
         let settings = json!({
             "type": "update_settings",
             "settings": {
@@ -87,33 +131,44 @@ impl ChatManager {
                 "mcp_servers": mcp_config
             }
         });
+        debug!("Settings payload: {:?}", settings);
 
+        info!("Parsing actor ID: {}", actor_id);
         let actor_id_parsed: TheaterId = actor_id.parse().context("Failed to parse actor ID")?;
+        debug!("Parsed actor ID: {:?}", actor_id_parsed);
 
+        info!("Sending settings to actor...");
         connection.send(ManagementCommand::RequestActorMessage {
             id: actor_id_parsed.clone(),
             data: serde_json::to_vec(&settings).context("Failed to serialize settings")?,
         }).await.context("Failed to send settings to actor")?;
+        info!("Settings sent successfully");
 
         // Wait for settings confirmation
+        info!("Waiting for settings confirmation...");
         loop {
+            debug!("Waiting for settings confirmation response...");
             let response = connection.receive().await?;
+            debug!("Received settings response: {:?}", response);
 
             match response {
                 ManagementResponse::RequestedMessage { .. } => {
+                    info!("Settings configured successfully");
                     break;
                 }
                 ManagementResponse::Error { error } => {
+                    error!("Failed to configure actor: {:?}", error);
                     return Err(anyhow::anyhow!("Failed to configure actor: {:?}", error));
                 }
                 _ => {
-                    // Continue waiting
+                    debug!("Received unexpected response, continuing to wait for settings confirmation...");
                 }
             }
         }
 
         let connection = Arc::new(Mutex::new(connection));
 
+        info!("ChatManager created successfully with actor ID: {}", actor_id);
         Ok(ChatManager {
             connection,
             actor_id,
@@ -124,6 +179,9 @@ impl ChatManager {
 
     /// Send a message and get the response
     pub async fn send_message(&mut self, message: String) -> Result<Vec<ChatMessage>> {
+        info!("Sending message: {}", message);
+        debug!("Actor ID: {}", self.actor_id);
+        
         let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
 
         let message_obj = Message {
