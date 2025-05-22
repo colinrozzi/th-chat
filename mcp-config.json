@@ -1,7 +1,7 @@
 [
 	{
 		"config": {
-			"command": "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server",
+			"command": "/Users/colinrozzi/work/mcp-servers/simple-fs-mcp/target/release/simple-fs-mcp-server",
 			"args": [
 				"--allowed-dirs",
 				"/Users/colinrozzi/work/tools/th-chat,/Users/colinrozzi/work/actor-registry/chat-state,/Users/colinrozzi/work/theater"
