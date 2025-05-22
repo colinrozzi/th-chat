@@ -2,7 +2,10 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use genai_types::{messages::Role, Message, MessageContent};
 use ratatui::{backend::Backend, Terminal};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use tracing::{info, debug, error};
+use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage};
 use crate::config::Args;
@@ -24,7 +27,7 @@ pub struct App {
     pub input: String,
     /// Current input cursor position
     pub input_cursor_position: usize,
-    /// History of recorded messages
+    /// History of recorded messages (for UI compatibility)
     pub messages: Vec<ChatMessage>,
     /// Current position in the message list
     pub messages_state: usize,
@@ -46,6 +49,12 @@ pub struct App {
     pub scroll_state: ratatui::widgets::ScrollbarState,
     /// Vertical scroll offset
     pub vertical_scroll: usize,
+    /// Client's current head in the conversation chain
+    pub client_head: Option<String>,
+    /// Messages indexed by their ID for efficient lookup
+    pub messages_by_id: HashMap<String, ChatMessage>,
+    /// Ordered list of message IDs representing the current conversation view
+    pub message_chain: Vec<String>,
 }
 
 impl Default for App {
@@ -65,6 +74,9 @@ impl Default for App {
             show_help: false,
             scroll_state: ratatui::widgets::ScrollbarState::default(),
             vertical_scroll: 0,
+            client_head: None,
+            messages_by_id: HashMap::new(),
+            message_chain: Vec::new(),
         }
     }
 }
@@ -77,13 +89,20 @@ impl App {
         }
     }
 
-    /// Main application loop
+    /// Main application loop with chain synchronization
     pub async fn run<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
         chat_manager: &mut ChatManager,
         args: &Args,
     ) -> Result<()> {
+        // Initial sync to load any existing conversation
+        info!("Performing initial sync with chat-state actor");
+        self.sync_with_chat_state(chat_manager).await
+            .unwrap_or_else(|e| {
+                error!("Failed initial sync: {:?}", e);
+            });
+        
         // Main event loop
         loop {
             self.update_thinking_animation();
@@ -99,7 +118,38 @@ impl App {
                 match event::read()? {
                     Event::Key(key_event) => {
                         if let Some(message) = self.handle_key_event(key_event)? {
-                            self.handle_message(message, chat_manager, args).await?;
+                            // Handle special commands
+                            if message.starts_with('/') {
+                                self.handle_command(&message[1..]);
+                            } else {
+                                // Send message and sync
+                                self.waiting_for_response = true;
+                                
+                                match chat_manager.send_message_get_head(message).await {
+                                    Ok(_new_head) => {
+                                        // Sync to get the new messages
+                                        if let Err(e) = self.sync_with_chat_state(chat_manager).await {
+                                            error!("Failed to sync after sending message: {:?}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to send message: {:?}", e);
+                                        let error_message = ChatMessage {
+                                            id: Some(format!("error-{}", Uuid::new_v4())),
+                                            parent_id: None,
+                                            message: Message {
+                                                role: Role::System,
+                                                content: vec![MessageContent::Text {
+                                                    text: format!("Error: {}", e),
+                                                }],
+                                            },
+                                        };
+                                        self.add_message_to_chain(error_message);
+                                    }
+                                }
+                                
+                                self.waiting_for_response = false;
+                            }
                         }
                     }
                     Event::Resize(_, _) => {
@@ -182,57 +232,7 @@ impl App {
         Ok(None)
     }
 
-    /// Handle a message that was submitted by the user
-    async fn handle_message(
-        &mut self,
-        message: String,
-        chat_manager: &mut ChatManager,
-        args: &Args,
-    ) -> Result<()> {
-        // Handle special commands
-        if message.starts_with('/') {
-            self.handle_command(&message);
-            return Ok(());
-        }
 
-        // Add user message to display
-        let user_message = ChatMessage {
-            id: None,
-            parent_id: None,
-            message: Message {
-                role: Role::User,
-                content: vec![MessageContent::Text { text: message.clone() }],
-            },
-        };
-        self.add_message(user_message);
-
-        // Send message to chat manager and get response
-        self.set_waiting(true);
-        
-        match chat_manager.send_message(message).await {
-            Ok(response_messages) => {
-                self.set_waiting(false);
-                for msg in response_messages {
-                    self.add_message(msg);
-                }
-            }
-            Err(e) => {
-                self.set_waiting(false);
-                let error_msg = format!("Error: {}", e);
-                let system_message = ChatMessage {
-                    id: None,
-                    parent_id: None,
-                    message: Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text { text: error_msg }],
-                    },
-                };
-                self.add_message(system_message);
-            }
-        }
-
-        Ok(())
-    }
 
     /// Handle special commands
     fn handle_command(&mut self, command: &str) {
@@ -241,8 +241,18 @@ impl App {
                 self.toggle_help();
             }
             "/clear" => {
-                self.messages.clear();
-                self.update_scroll();
+                self.clear_conversation();
+                let clear_message = ChatMessage {
+                    id: Some(format!("system-{}", Uuid::new_v4())),
+                    parent_id: None,
+                    message: Message {
+                        role: Role::System,
+                        content: vec![MessageContent::Text {
+                            text: "Conversation cleared".to_string(),
+                        }],
+                    },
+                };
+                self.add_message_to_chain(clear_message);
             }
             "/debug" => {
                 self.debug = !self.debug;
@@ -259,19 +269,34 @@ impl App {
             }
             "/status" => {
                 let status_text = format!(
-                    "Connection: {} | Messages: {}",
-                    self.connection_status,
-                    self.messages.len()
+                    "Client head: {:?}, Messages: {}, Chain length: {}",
+                    self.client_head,
+                    self.messages.len(),
+                    self.message_chain.len()
                 );
-                let system_message = ChatMessage {
-                    id: None,
+                let status_message = ChatMessage {
+                    id: Some(format!("system-{}", Uuid::new_v4())),
                     parent_id: None,
                     message: Message {
                         role: Role::System,
                         content: vec![MessageContent::Text { text: status_text }],
                     },
                 };
-                self.add_message(system_message);
+                self.add_message_to_chain(status_message);
+            }
+            "/sync" => {
+                // Add a manual sync command for debugging
+                let sync_message = ChatMessage {
+                    id: Some(format!("system-{}", Uuid::new_v4())),
+                    parent_id: None,
+                    message: Message {
+                        role: Role::System,
+                        content: vec![MessageContent::Text {
+                            text: "Manual sync requested (will sync on next opportunity)".to_string(),
+                        }],
+                    },
+                };
+                self.add_message_to_chain(sync_message);
             }
             _ => {
                 let error_msg = format!("Unknown command: {}. Type /help for available commands.", command);
@@ -350,7 +375,88 @@ impl App {
         Some(message)
     }
 
-    /// Add a message to the conversation
+    /// Sync with the chat-state actor by fetching new messages from our head to the server's head
+    pub async fn sync_with_chat_state(&mut self, chat_manager: &mut ChatManager) -> Result<()> {
+        info!("Syncing with chat-state actor");
+        
+        // Get the current head from the chat-state actor
+        let server_head = chat_manager.get_current_head().await?;
+        
+        // If server head is None, there's no conversation yet
+        let Some(server_head) = server_head else {
+            info!("No conversation exists on server yet");
+            return Ok(());
+        };
+        
+        // If our client head matches the server head, we're already in sync
+        if self.client_head.as_ref() == Some(&server_head) {
+            debug!("Already in sync with server head: {}", server_head);
+            return Ok(());
+        }
+        
+        info!("Server head: {}, Client head: {:?}", server_head, self.client_head);
+        
+        // Fetch new messages from server head back to our client head
+        let new_messages = chat_manager.get_messages_since_head(&server_head, &self.client_head).await?;
+        
+        info!("Fetched {} new messages", new_messages.len());
+        
+        // Add new messages to our state
+        for message in new_messages {
+            self.add_message_to_chain(message);
+        }
+        
+        // Update our client head
+        self.client_head = Some(server_head);
+        
+        info!("Sync complete. New client head: {}", self.client_head.as_ref().unwrap());
+        Ok(())
+    }
+    
+    /// Add a message to the chain, maintaining the linked structure
+    fn add_message_to_chain(&mut self, message: ChatMessage) {
+        let message_id = message.id.as_ref().unwrap().clone();
+        
+        // Store the message
+        self.messages_by_id.insert(message_id.clone(), message.clone());
+        
+        // Add to chain if not already present
+        if !self.message_chain.contains(&message_id) {
+            self.message_chain.push(message_id);
+        }
+        
+        // Rebuild the messages vector for UI compatibility
+        self.rebuild_messages_vector();
+        
+        self.update_scroll();
+        self.auto_scroll_to_bottom();
+    }
+    
+    /// Rebuild the messages vector from the chain for UI rendering
+    fn rebuild_messages_vector(&mut self) {
+        self.messages = self.message_chain
+            .iter()
+            .filter_map(|id| self.messages_by_id.get(id))
+            .cloned()
+            .collect();
+    }
+    
+    /// Auto-scroll to bottom after adding messages
+    fn auto_scroll_to_bottom(&mut self) {
+        self.vertical_scroll = self.messages.len().saturating_sub(1);
+        self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+    }
+    
+    /// Clear the conversation (reset chain state)
+    pub fn clear_conversation(&mut self) {
+        self.messages.clear();
+        self.messages_by_id.clear();
+        self.message_chain.clear();
+        self.client_head = None;
+        self.update_scroll();
+    }
+
+    /// Add a message to the conversation (legacy method for compatibility)
     pub fn add_message(&mut self, message: ChatMessage) {
         self.messages.push(message);
         self.messages_state = self.messages.len().saturating_sub(1);

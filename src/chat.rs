@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use genai_types::{messages::Role, Message, MessageContent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use theater::client::TheaterConnection;
@@ -9,7 +10,6 @@ use theater::id::TheaterId;
 use theater::theater_server::{ManagementCommand, ManagementResponse};
 use tokio::sync::Mutex;
 use tracing::{info, error, debug, warn};
-
 
 use crate::config::{Args, CHAT_STATE_ACTOR_MANIFEST};
 
@@ -21,11 +21,33 @@ pub struct ChatMessage {
     pub message: Message,
 }
 
+/// Response types from the chat-state actor
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum ChatStateResponse {
+    #[serde(rename = "head")]
+    Head { head: Option<String> },
+    #[serde(rename = "history")]
+    History { messages: Vec<ChatMessage> },
+    #[serde(rename = "chat_message")]
+    ChatMessage { message: ChatMessage },
+    #[serde(rename = "error")]
+    Error { error: ErrorInfo },
+    #[serde(rename = "success")]
+    Success,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ErrorInfo {
+    code: String,
+    message: String,
+    details: Option<HashMap<String, String>>,
+}
+
 /// Manages the chat connection and state
 pub struct ChatManager {
     connection: Arc<Mutex<TheaterConnection>>,
     actor_id: String,
-    last_known_head: Option<String>,
     debug: bool,
 }
 
@@ -172,145 +194,11 @@ impl ChatManager {
         Ok(ChatManager {
             connection,
             actor_id,
-            last_known_head: None,
             debug: args.debug,
         })
     }
 
-    /// Send a message and get the response
-    pub async fn send_message(&mut self, message: String) -> Result<Vec<ChatMessage>> {
-        info!("Sending message: {}", message);
-        debug!("Actor ID: {}", self.actor_id);
-        
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
 
-        let message_obj = Message {
-            role: Role::User,
-            content: vec![MessageContent::Text { text: message }],
-        };
-
-        let add_message_request = json!({
-            "type": "add_message",
-            "message": message_obj
-        });
-
-        // Send the message to the actor
-        {
-            let mut conn = self.connection.lock().await;
-            conn.send(ManagementCommand::RequestActorMessage {
-                id: actor_id_parsed.clone(),
-                data: serde_json::to_vec(&add_message_request)
-                    .context("Failed to serialize message request")?,
-            })
-            .await
-            .context("Failed to send message to actor")?;
-        }
-
-        // Wait for the request response
-        loop {
-            let resp = {
-                let mut conn = self.connection.lock().await;
-                conn.receive().await?
-            };
-
-            match resp {
-                ManagementResponse::RequestedMessage { .. } => {
-                    break;
-                }
-                ManagementResponse::Error { error } => {
-                    return Err(anyhow::anyhow!("Error from actor: {:?}", error));
-                }
-                _ => {
-                    // Continue waiting
-                }
-            }
-        }
-
-        // Generate completion
-        let generate_completion_request = json!({
-            "type": "generate_completion"
-        });
-
-        {
-            let mut conn = self.connection.lock().await;
-            conn.send(ManagementCommand::RequestActorMessage {
-                id: actor_id_parsed.clone(),
-                data: serde_json::to_vec(&generate_completion_request)
-                    .context("Failed to serialize completion request")?,
-            })
-            .await
-            .context("Failed to send completion request to actor")?;
-        }
-
-        // Wait for completion and get new messages
-        let new_head = loop {
-            let resp = {
-                let mut conn = self.connection.lock().await;
-                conn.receive().await?
-            };
-
-            match &resp {
-                ManagementResponse::RequestedMessage { message, .. } => {
-                    match serde_json::from_slice::<serde_json::Value>(message) {
-                        Ok(response_value) => {
-                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str()) {
-                                break head.to_string();
-                            } else if let Some(error) = response_value.get("error") {
-                                return Err(anyhow::anyhow!("Error from actor: {}", error));
-                            }
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!("Error parsing completion response: {}", e));
-                        }
-                    }
-                }
-                ManagementResponse::Error { error } => {
-                    return Err(anyhow::anyhow!("Theater error: {:?}", error));
-                }
-                _ => {
-                    // Continue waiting
-                }
-            }
-        };
-
-        // Get new messages since our last known head
-        let new_messages = self.get_new_messages(&new_head).await?;
-        
-        // Update our head
-        self.last_known_head = Some(new_head);
-
-        Ok(new_messages)
-    }
-
-    /// Get new messages from the theater system
-    async fn get_new_messages(&self, new_head: &str) -> Result<Vec<ChatMessage>> {
-        let mut messages = Vec::new();
-        let mut current_id = Some(new_head.to_string());
-
-        // Traverse backwards from new head until we reach our last known head (or the beginning)
-        while let Some(id) = current_id {
-            // Skip if this is our last known head (we don't want to re-display it)
-            if Some(&id) == self.last_known_head.as_ref() {
-                break;
-            }
-
-            // Get the message
-            match self.get_message_by_id(&id).await? {
-                Some(chat_message) => {
-                    messages.push(chat_message.clone());
-                    current_id = chat_message.parent_id;
-                }
-                None => {
-                    // Message not found, stop traversal
-                    break;
-                }
-            }
-        }
-
-        // Reverse to get chronological order (oldest to newest)
-        messages.reverse();
-        Ok(messages)
-    }
 
     /// Get a specific message by ID from the chat-state actor
     async fn get_message_by_id(&self, message_id: &str) -> Result<Option<ChatMessage>> {
@@ -372,6 +260,189 @@ impl ChatManager {
                 _ => {
                     // Continue waiting for the correct response
                 }
+            }
+        }
+    }
+
+    /// Get the current head from the chat-state actor
+    pub async fn get_current_head(&mut self) -> Result<Option<String>> {
+        info!("Getting current head from chat-state actor");
+        
+        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
+        
+        let get_head_request = json!({
+            "type": "get_head"
+        });
+        
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&get_head_request)
+                    .context("Failed to serialize get_head request")?,
+            })
+            .await
+            .context("Failed to send get_head request")?;
+        }
+        
+        // Wait for response
+        loop {
+            let resp = {
+                let mut conn = self.connection.lock().await;
+                conn.receive().await?
+            };
+            
+            match resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    let response: ChatStateResponse = serde_json::from_slice(&message)
+                        .context("Failed to parse head response")?;
+                    
+                    match response {
+                        ChatStateResponse::Head { head } => {
+                            debug!("Received head: {:?}", head);
+                            return Ok(head);
+                        }
+                        ChatStateResponse::Error { error } => {
+                            warn!("Error getting head: {:?}", error);
+                            return Ok(None);
+                        }
+                        _ => {
+                            return Err(anyhow::anyhow!("Unexpected response for get_head: {:?}", response));
+                        }
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error getting head: {:?}", error));
+                }
+                _ => {
+                    debug!("Ignoring unexpected response while waiting for head");
+                }
+            }
+        }
+    }
+    
+    /// Get messages from server_head back to client_head (following the chain backward)
+    pub async fn get_messages_since_head(&self, server_head: &str, client_head: &Option<String>) -> Result<Vec<ChatMessage>> {
+        info!("Getting messages from {} back to {:?}", server_head, client_head);
+        
+        let mut messages = Vec::new();
+        let mut current_id = Some(server_head.to_string());
+        
+        // Traverse backwards from server head until we reach our client head (or the beginning)
+        while let Some(id) = current_id {
+            // Stop if we've reached our client's known head
+            if client_head.as_ref() == Some(&id) {
+                debug!("Reached client head: {}", id);
+                break;
+            }
+            
+            // Get the message
+            match self.get_message_by_id(&id).await? {
+                Some(chat_message) => {
+                    debug!("Retrieved message: {}", id);
+                    messages.push(chat_message.clone());
+                    current_id = chat_message.parent_id;
+                }
+                None => {
+                    warn!("Message not found: {}", id);
+                    break;
+                }
+            }
+        }
+        
+        // Reverse to get chronological order (oldest to newest)
+        messages.reverse();
+        info!("Retrieved {} messages in chronological order", messages.len());
+        Ok(messages)
+    }
+    
+    /// Send a message and return the new head (don't fetch messages here)
+    pub async fn send_message_get_head(&mut self, message: String) -> Result<String> {
+        info!("Sending message and getting new head");
+        
+        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
+        
+        let message_obj = Message {
+            role: Role::User,
+            content: vec![MessageContent::Text { text: message }],
+        };
+        
+        let add_message_request = json!({
+            "type": "add_message",
+            "message": message_obj
+        });
+        
+        // Send the message
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed.clone(),
+                data: serde_json::to_vec(&add_message_request)
+                    .context("Failed to serialize message request")?,
+            })
+            .await
+            .context("Failed to send message to actor")?;
+        }
+        
+        // Wait for acknowledgment
+        loop {
+            let resp = {
+                let mut conn = self.connection.lock().await;
+                conn.receive().await?
+            };
+            
+            match resp {
+                ManagementResponse::RequestedMessage { .. } => break,
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error adding message: {:?}", error));
+                }
+                _ => continue,
+            }
+        }
+        
+        // Generate completion
+        let generate_request = json!({
+            "type": "generate_completion"
+        });
+        
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&generate_request)
+                    .context("Failed to serialize generate request")?,
+            })
+            .await
+            .context("Failed to send generate request")?;
+        }
+        
+        // Wait for completion and get new head
+        loop {
+            let resp = {
+                let mut conn = self.connection.lock().await;
+                conn.receive().await?
+            };
+            
+            match resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    let response: ChatStateResponse = serde_json::from_slice(&message)
+                        .context("Failed to parse completion response")?;
+                    
+                    match response {
+                        ChatStateResponse::Head { head: Some(new_head) } => {
+                            info!("Received new head after completion: {}", new_head);
+                            return Ok(new_head);
+                        }
+                        ChatStateResponse::Error { error } => {
+                            return Err(anyhow::anyhow!("Error generating completion: {:?}", error));
+                        }
+                        _ => continue,
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error generating completion: {:?}", error));
+                }
+                _ => continue,
             }
         }
     }
