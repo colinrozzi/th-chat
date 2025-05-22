@@ -55,66 +55,189 @@ fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &Args) {
     f.render_widget(title_paragraph, area);
 }
 
-/// Render the chat messages area
+/// Format a single MessageContent into displayable lines
+fn format_message_content(content: &MessageContent, available_width: usize) -> Vec<Line<'static>> {
+    match content {
+        MessageContent::Text { text } => {
+            let wrapped_text = textwrap::fill(text, available_width);
+            wrapped_text
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect()
+        }
+        MessageContent::ToolUse { id, name, input } => {
+            let mut lines = Vec::new();
+            
+            // Tool use header
+            lines.push(Line::from(vec![
+                Span::styled("🔧 ", Style::default().fg(Color::Magenta)),
+                Span::styled("Tool Use: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]));
+            
+            // Tool ID (in a more subtle style)
+            lines.push(Line::from(vec![
+                Span::styled("   ID: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(id.clone(), Style::default().fg(Color::DarkGray)),
+            ]));
+            
+            // Tool input (formatted JSON)
+            let input_str = if input.is_null() {
+                "No parameters".to_string()
+            } else {
+                match serde_json::to_string_pretty(input) {
+                    Ok(formatted) => formatted,
+                    Err(_) => format!("{}", input),
+                }
+            };
+            
+            lines.push(Line::from(vec![
+                Span::styled("   Input: ", Style::default().fg(Color::Yellow)),
+            ]));
+            
+            // Wrap and indent the input JSON
+            let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
+            for line in wrapped_input.lines() {
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                ]));
+            }
+            
+            lines
+        }
+        MessageContent::ToolResult { tool_use_id, content, is_error } => {
+            let mut lines = Vec::new();
+            
+            // Tool result header
+            let (icon, header_style) = if is_error.unwrap_or(false) {
+                ("❌", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            } else {
+                ("✅", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            };
+            
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", icon), header_style),
+                Span::styled("Tool Result", header_style),
+            ]));
+            
+            // Tool use ID reference
+            lines.push(Line::from(vec![
+                Span::styled("   For tool ID: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(tool_use_id.clone(), Style::default().fg(Color::DarkGray)),
+            ]));
+            
+            // Tool result content
+            for tool_content in content {
+                match tool_content {
+                    mcp_protocol::tool::ToolContent::Text { text } => {
+                        lines.push(Line::from(vec![
+                            Span::styled("   Output: ", Style::default().fg(Color::Cyan)),
+                        ]));
+                        
+                        let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
+                        for line in wrapped_output.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("     ", Style::default()),
+                                Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                            ]));
+                        }
+                    }
+                    mcp_protocol::tool::ToolContent::Image { data, mime_type } => {
+                        lines.push(Line::from(vec![
+                            Span::styled("   📷 Image: ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                format!("{} ({} bytes)", mime_type, data.len()),
+                                Style::default().fg(Color::White),
+                            ),
+                        ]));
+                    }
+                    mcp_protocol::tool::ToolContent::Audio { data, mime_type } => {
+                        lines.push(Line::from(vec![
+                            Span::styled("   🎵 Audio: ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                format!("{} ({} bytes)", mime_type, data.len()),
+                                Style::default().fg(Color::White),
+                            ),
+                        ]));
+                    }
+                    mcp_protocol::tool::ToolContent::Resource { resource } => {
+                        lines.push(Line::from(vec![
+                            Span::styled("   🔗 Resource: ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                format!("{}", resource),
+                                Style::default().fg(Color::White),
+                            ),
+                        ]));
+                    }
+                }
+            }
+            
+            lines
+        }
+    }
+}
+
+/// Render the chat messages area with enhanced tool use support
 fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     let messages_block = Block::default()
         .borders(Borders::ALL)
         .title("Chat")
         .title_style(Style::default().fg(Color::Yellow));
 
-    // Calculate how many messages can fit in the available area
+    // Calculate available width for text wrapping (subtract borders and padding)
+    let available_width = (area.width.saturating_sub(6)) as usize;
+    
+    // Flatten all messages into renderable items with proper line counting
+    let mut all_items = Vec::new();
+    let mut total_lines = 0;
+    
+    for chat_msg in &app.messages {
+        let (prefix, role_style) = match chat_msg.message.role {
+            Role::User => ("👤 You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Role::Assistant => ("🤖 Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Role::System => ("⚙️ System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        };
+        
+        // Add role header
+        all_items.push(ListItem::new(Line::from(Span::styled(prefix, role_style))));
+        total_lines += 1;
+        
+        // Process each content item in the message
+        for content in &chat_msg.message.content {
+            let content_lines = format_message_content(content, available_width);
+            for line in content_lines {
+                all_items.push(ListItem::new(line));
+                total_lines += 1;
+            }
+        }
+        
+        // Add spacing between messages
+        all_items.push(ListItem::new(Line::from("")));
+        total_lines += 1;
+    }
+
+    // Calculate how many items can fit in the available area
     let available_height = area.height.saturating_sub(2) as usize; // subtract borders
     
-    // Calculate which messages to show
-    let total_messages = app.messages.len();
-    let start_index = if total_messages <= available_height {
-        // If all messages fit, show them all
+    // Calculate which items to show based on scroll
+    let start_index = if total_lines <= available_height {
         0
     } else {
-        // Show the most recent messages that fit, accounting for scroll offset
-        let max_start = total_messages.saturating_sub(available_height);
+        let max_start = total_lines.saturating_sub(available_height);
         (max_start.saturating_sub(app.vertical_scroll)).min(max_start)
     };
     
-    let end_index = (start_index + available_height).min(total_messages);
+    let end_index = (start_index + available_height).min(total_lines);
 
-    let messages: Vec<ListItem> = app
-        .messages
-        .iter()
-        .enumerate()
+    // Take the visible slice of items
+    let visible_items: Vec<ListItem> = all_items
+        .into_iter()
         .skip(start_index)
         .take(end_index - start_index)
-        .map(|(_, chat_msg)| {
-            let content = match &chat_msg.message.content[0] {
-                MessageContent::Text { text } => text.clone(),
-                _ => "Unsupported message type".to_string(),
-            };
-
-            let (prefix, style) = match chat_msg.message.role {
-                Role::User => ("👤 You: ", Style::default().fg(Color::Green)),
-                Role::Assistant => ("🤖 Assistant: ", Style::default().fg(Color::Blue)),
-                Role::System => ("⚙️  System: ", Style::default().fg(Color::Yellow)),
-            };
-
-            let wrapped_content = textwrap::fill(&content, (area.width - 4) as usize);
-            let mut lines = vec![Line::from(Span::styled(
-                format!("{}{}", prefix, wrapped_content.lines().next().unwrap_or("")),
-                style,
-            ))];
-
-            // Add continuation lines for wrapped text
-            for line in wrapped_content.lines().skip(1) {
-                lines.push(Line::from(Span::styled(
-                    format!("     {}", line),
-                    style,
-                )));
-            }
-
-            ListItem::new(lines)
-        })
         .collect();
 
-    let messages_list = List::new(messages).block(messages_block);
+    let messages_list = List::new(visible_items).block(messages_block);
     f.render_widget(messages_list, area);
 
     // Render scrollbar for messages
@@ -201,6 +324,13 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  /debug     - Toggle debug mode"),
         Line::from("  /status    - Show connection status"),
         Line::from(""),
+        Line::from("Message Types:"),
+        Line::from("  👤 User messages"),
+        Line::from("  🤖 Assistant messages"),
+        Line::from("  🔧 Tool use (function calls)"),
+        Line::from("  ✅ Tool results (success)"),
+        Line::from("  ❌ Tool results (error)"),
+        Line::from(""),
         Line::from("Press F1 or Esc to close this help"),
     ];
 
@@ -212,7 +342,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
                 .title_style(Style::default().fg(Color::Yellow)),
         )
         .wrap(Wrap { trim: true });
-    f.render_widget(help_paragraph, popup_area);
+    f.render_widget(help_paragraph, area);
 }
 
 /// Helper function to create a centered rect
