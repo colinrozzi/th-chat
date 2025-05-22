@@ -3,6 +3,7 @@ use clap::Parser;
 use colored::*;
 use console::{Style, Term};
 use genai_types::{messages::Role, Message, MessageContent};
+use mcp_protocol::tool::ToolContent;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::json;
 use std::io::{self};
@@ -72,6 +73,145 @@ fn read_mcp_config(path: &str) -> Result<Vec<serde_json::Value>> {
         .context(format!("Failed to parse MCP config file as JSON: {}", path))?;
 
     Ok(config)
+}
+
+/// Parse a Message from JSON response and display it with rich formatting
+fn parse_and_display_message(response_value: &serde_json::Value, debug: bool) -> Result<Option<String>> {
+    if let Some(message_obj) = response_value.get("message").and_then(|m| m.get("message")) {
+        if let Some(content) = message_obj.get("content") {
+            if content.is_array() {
+                // Deserialize the full message - error out if this fails
+                let message: Message = serde_json::from_value(message_obj.clone())
+                    .context("Failed to deserialize message")?;
+                
+                if debug {
+                    display_message_summary(&message);
+                }
+                
+                display_rich_message(&message);
+                return Ok(extract_text_content(&message));
+            } else {
+                return Err(anyhow::anyhow!("Expected message content to be an array"));
+            }
+        } else {
+            return Err(anyhow::anyhow!("No content field found in message"));
+        }
+    } else {
+        return Err(anyhow::anyhow!("No message object found in response"));
+    }
+}
+
+/// Display a Message with rich formatting showing all content types
+fn display_rich_message(message: &Message) {
+    println!(); // Add some spacing
+    
+    for content in &message.content {
+        match content {
+            MessageContent::Text { text } => {
+                println!("{}", text);
+            }
+            
+            MessageContent::ToolUse { id, name, input } => {
+                println!("{}", "Tool Call".bright_cyan().bold());
+                println!("  {}: {}", "Name".bright_white().bold(), name.bright_yellow());
+                println!("  {}: {}", "ID".bright_white().bold(), id.dimmed());
+                
+                // Pretty print the input parameters
+                if let Ok(pretty_input) = serde_json::to_string_pretty(input) {
+                    println!("  {}:", "Parameters".bright_white().bold());
+                    for line in pretty_input.lines() {
+                        let trimmed = line.trim();
+                        if trimmed != "{" && trimmed != "}" {
+                            println!("    {}", line.cyan());
+                        }
+                    }
+                } else {
+                    println!("  {}: {:?}", "Parameters".bright_white().bold(), input);
+                }
+                println!();
+            }
+            
+            MessageContent::ToolResult { tool_use_id, content: tool_content, is_error } => {
+                let status_text = if is_error.unwrap_or(false) { 
+                    "Tool Result (ERROR)".bright_red().bold() 
+                } else { 
+                    "Tool Result".bright_green().bold() 
+                };
+                
+                println!("{}", status_text);
+                println!("  {}: {}", "Tool Use ID".bright_white().bold(), tool_use_id.dimmed());
+                
+                // Display tool result content
+                for result_content in tool_content {
+                    match result_content {
+                        ToolContent::Text { text } => {
+                            println!("  {}:", "Output".bright_white().bold());
+                            for line in text.lines() {
+                                println!("    {}", line);
+                            }
+                        }
+                        ToolContent::Image { .. } => {
+                            println!("  {}: {}", "Output".bright_white().bold(), "[Image content]".italic().dimmed());
+                        }
+                        ToolContent::Resource { .. } => {
+                            println!("  {}: {}", "Output".bright_white().bold(), "[Resource content]".italic().dimmed());
+                        }
+                        ToolContent::Audio { .. } => {
+                            println!("  {}: {}", "Output".bright_white().bold(), "[Audio content]".italic().dimmed());
+                        }
+                    }
+                }
+                println!();
+            }
+        }
+    }
+}
+
+/// Extract just the text content from a Message for simple text return
+fn extract_text_content(message: &Message) -> Option<String> {
+    let mut full_text = String::new();
+    
+    for content in &message.content {
+        if let MessageContent::Text { text } = content {
+            if !full_text.is_empty() {
+                full_text.push('\n');
+            }
+            full_text.push_str(text);
+        }
+    }
+    
+    if full_text.is_empty() {
+        None
+    } else {
+        Some(full_text)
+    }
+}
+
+/// Display a summary of message content types for debugging
+fn display_message_summary(message: &Message) {
+    let mut text_count = 0;
+    let mut tool_use_count = 0;
+    let mut tool_result_count = 0;
+    
+    for content in &message.content {
+        match content {
+            MessageContent::Text { .. } => text_count += 1,
+            MessageContent::ToolUse { .. } => tool_use_count += 1,
+            MessageContent::ToolResult { .. } => tool_result_count += 1,
+        }
+    }
+    
+    println!("{}", "Message Summary:".bright_blue().bold());
+    if text_count > 0 {
+        println!("  Text blocks: {}", text_count);
+    }
+    if tool_use_count > 0 {
+        println!("  Tool calls: {}", tool_use_count);
+    }
+    if tool_result_count > 0 {
+        println!("  Tool results: {}", tool_result_count);
+    }
+    println!();
 }
 
 #[tokio::main]
@@ -602,61 +742,31 @@ async fn run_chat_loop(
                 ManagementResponse::RequestedMessage { message, .. } => {
                     match serde_json::from_slice::<serde_json::Value>(message) {
                         Ok(response_value) => {
-                            if let Some(message_obj) =
-                                response_value.get("message").and_then(|m| m.get("message"))
-                            {
-                                if let Some(content) = message_obj.get("content") {
-                                    // Check if content is an array (new structure)
-                                    if content.is_array() {
-                                        // Extract text from the first text element in the array
-                                        let mut full_text = String::new();
-                                        for content_part in content.as_array().unwrap() {
-                                            if let (Some(content_type), Some(text)) = (
-                                                content_part.get("type").and_then(|t| t.as_str()),
-                                                content_part.get("text").and_then(|t| t.as_str()),
-                                            ) {
-                                                if content_type == "text" {
-                                                    full_text.push_str(text);
-                                                }
-                                            }
-                                        }
-                                        if !full_text.is_empty() {
-                                            assistant_response = Some(full_text);
-                                        }
-                                    } else {
-                                        // Try the old structure as fallback
-                                        if let Some(data) = content.get("data") {
-                                            if let Some(text) = data.as_str() {
-                                                assistant_response = Some(text.to_string());
-                                            } else {
-                                                println!("Non-string data: {:?}", data);
-                                            }
-                                        } else {
-                                            println!(
-                                                "Unrecognized content structure: {:?}",
-                                                content
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    println!("No content field in message: {:?}", message_obj);
+                            match parse_and_display_message(&response_value, args.debug) {
+                                Ok(text_response) => {
+                                    assistant_response = text_response;
+                                    break;
                                 }
-                            } else if let Some(error) = response_value.get("error") {
-                                pb.finish_and_clear();
-                                println!("Error in response: {}", error);
-                                error_received = true;
-                            } else {
-                                // Print the full response for debugging
-                                if args.debug {
-                                    println!("Unexpected response format: {}", response_value);
+                                Err(e) => {
+                                    pb.finish_and_clear();
+                                    println!("Error parsing message: {}", e);
+                                    if let Some(error) = response_value.get("error") {
+                                        println!("Server error: {}", error);
+                                    }
+                                    if args.debug {
+                                        println!("Full response: {:?}", response_value);
+                                    }
+                                    error_received = true;
+                                    break;
                                 }
                             }
                         }
                         Err(e) => {
                             pb.finish_and_clear();
-                            println!("Error parsing message response: {}", e);
+                            println!("Error parsing JSON response: {}", e);
                             println!("Raw response: {}", String::from_utf8_lossy(message));
                             error_received = true;
+                            break;
                         }
                     }
                 }

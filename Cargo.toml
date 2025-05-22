@@ -19,6 +19,7 @@ console = "0.15.7"
 
 # Dependencies for message types
 genai-types = { path = "/Users/colinrozzi/work/genai-types" }
+mcp-protocol = "0.2.0"
 
 # Local dependency on theater
 theater = { path = "/Users/colinrozzi/work/theater" }
