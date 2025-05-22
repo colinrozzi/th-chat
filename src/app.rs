@@ -443,8 +443,8 @@ impl App {
     
     /// Auto-scroll to bottom after adding messages (keep at bottom by default)
     fn auto_scroll_to_bottom(&mut self) {
-        self.vertical_scroll = 0; // 0 means show most recent messages
-        self.scroll_state = self.scroll_state.position(0);
+        // vertical_scroll = 0 now correctly means show most recent messages (bottom)
+        self.vertical_scroll = 0;
     }
     
     /// Clear the conversation (reset chain state)

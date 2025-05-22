@@ -225,7 +225,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         // vertical_scroll = 0 means show most recent (bottom)
         // vertical_scroll > 0 means scroll up to see older messages
         let max_scroll = total_lines.saturating_sub(available_height);
-        app.vertical_scroll.min(max_scroll)
+        max_scroll.saturating_sub(app.vertical_scroll)
     };
     
     let end_index = (start_index + available_height).min(total_lines);
