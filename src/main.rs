@@ -5,6 +5,7 @@ use console::{Style, Term};
 use genai_types::{messages::Role, Message, MessageContent};
 use mcp_protocol::tool::ToolContent;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self};
 use std::net::SocketAddr;
@@ -62,6 +63,146 @@ struct Args {
 const CHAT_STATE_ACTOR_MANIFEST: &str =
     "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";
 
+/// Conversation state tracking
+#[derive(Debug, Clone)]
+struct ConversationState {
+    actor_id: String,
+    last_known_head: Option<String>,
+}
+
+/// Chat message structure matching the chat-state actor
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatMessage {
+    pub id: Option<String>,
+    pub parent_id: Option<String>,
+    pub message: Message,
+}
+
+impl ConversationState {
+    fn new(actor_id: String) -> Self {
+        Self {
+            actor_id,
+            last_known_head: None,
+        }
+    }
+
+    /// Update the tracked head after displaying messages
+    fn update_head(&mut self, new_head: String) {
+        self.last_known_head = Some(new_head);
+    }
+
+    /// Get all new messages since our last known head
+    async fn get_new_messages(
+        &self,
+        connection: &mut TheaterConnection,
+        new_head: &str,
+        args: &Args,
+    ) -> Result<Vec<Message>> {
+        let mut messages = Vec::new();
+        let mut current_id = Some(new_head.to_string());
+        
+        // Traverse backwards from new head until we reach our last known head (or the beginning)
+        while let Some(id) = current_id {
+            // Skip if this is our last known head (we don't want to re-display it)
+            if Some(&id) == self.last_known_head.as_ref() {
+                break;
+            }
+
+            // Get the message
+            match self.get_message_by_id(connection, &id, args).await? {
+                Some(chat_message) => {
+                    messages.push(chat_message.message.clone());
+                    current_id = chat_message.parent_id;
+                }
+                None => {
+                    // Message not found, stop traversal
+                    if args.debug {
+                        println!("DEBUG - Message not found: {}", id);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Reverse to get chronological order (oldest to newest)
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// Get a specific message by ID from the chat-state actor
+    async fn get_message_by_id(
+        &self,
+        connection: &mut TheaterConnection,
+        message_id: &str,
+        args: &Args,
+    ) -> Result<Option<ChatMessage>> {
+        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
+        
+        let message_request = json!({
+            "type": "get_message",
+            "message_id": message_id
+        });
+
+        if args.debug {
+            println!("DEBUG - Requesting message ID: {}", message_id);
+        }
+
+        // Send the message request
+        connection
+            .send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&message_request)
+                    .context("Failed to serialize message request")?,
+            })
+            .await
+            .context("Failed to send message request to actor")?;
+
+        // Wait for response
+        loop {
+            let resp = connection.receive().await?;
+
+            if args.debug {
+                println!("DEBUG - Received message response: {:?}", resp);
+            }
+
+            match &resp {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    match serde_json::from_slice::<serde_json::Value>(message) {
+                        Ok(response_value) => {
+                            // Check if we got a chat_message response
+                            if let Some(message_obj) = response_value.get("message") {
+                                let chat_message: ChatMessage = serde_json::from_value(message_obj.clone())
+                                    .context("Failed to deserialize chat message")?;
+                                return Ok(Some(chat_message));
+                            }
+                            // Check for error response
+                            else if let Some(error) = response_value.get("error") {
+                                if let Some(code) = error.get("code").and_then(|c| c.as_str()) {
+                                    if code == "404" {
+                                        return Ok(None); // Message not found
+                                    }
+                                }
+                                return Err(anyhow::anyhow!("Error getting message: {}", error));
+                            }
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("Failed to parse message response: {}", e));
+                        }
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Theater error: {:?}", error));
+                }
+                _ => {
+                    if args.debug {
+                        println!("Unexpected response while getting message: {:?}", resp);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Read and parse the MCP servers configuration file
 fn read_mcp_config(path: &str) -> Result<Vec<serde_json::Value>> {
     // Read the file
@@ -75,36 +216,55 @@ fn read_mcp_config(path: &str) -> Result<Vec<serde_json::Value>> {
     Ok(config)
 }
 
-/// Parse a Message from JSON response and display it with rich formatting
-fn parse_and_display_message(response_value: &serde_json::Value, debug: bool) -> Result<Option<String>> {
-    if let Some(message_obj) = response_value.get("message").and_then(|m| m.get("message")) {
-        if let Some(content) = message_obj.get("content") {
-            if content.is_array() {
-                // Deserialize the full message - error out if this fails
-                let message: Message = serde_json::from_value(message_obj.clone())
-                    .context("Failed to deserialize message")?;
-                
-                if debug {
-                    display_message_summary(&message);
-                }
-                
-                display_rich_message(&message);
-                return Ok(extract_text_content(&message));
-            } else {
-                return Err(anyhow::anyhow!("Expected message content to be an array"));
-            }
-        } else {
-            return Err(anyhow::anyhow!("No content field found in message"));
+/// Display all new messages in the conversation
+async fn display_new_messages(
+    conversation_state: &mut ConversationState,
+    connection: &mut TheaterConnection,
+    new_head: &str,
+    args: &Args,
+) -> Result<()> {
+    let new_messages = conversation_state.get_new_messages(connection, new_head, args).await?;
+    
+    if new_messages.is_empty() {
+        if args.debug {
+            println!("{}", "No new messages to display".yellow());
         }
-    } else {
-        return Err(anyhow::anyhow!("No message object found in response"));
+        return Ok(());
     }
+
+    println!(); // Add spacing before messages
+    
+    for (i, message) in new_messages.iter().enumerate() {
+        // Add separator between messages (except for the first one)
+        if i > 0 {
+            println!("{}", "─".repeat(50).dimmed());
+        }
+
+        // Display role header
+        let role_display = match message.role.as_str() {
+            "user" => "User".cyan().bold(),
+            "assistant" => "Assistant".green().bold(),
+            _ => message.role.as_str().white().bold(),
+        };
+        
+        println!("{}", role_display);
+        
+        // Display the message content
+        display_rich_message(message);
+        
+        if args.debug {
+            println!("{}", format!("Message role: {}", message.role).dimmed());
+        }
+    }
+    
+    // Update our tracked head
+    conversation_state.update_head(new_head.to_string());
+    
+    Ok(())
 }
 
 /// Display a Message with rich formatting showing all content types
 fn display_rich_message(message: &Message) {
-    println!(); // Add some spacing
-    
     for content in &message.content {
         match content {
             MessageContent::Text { text } => {
@@ -112,7 +272,7 @@ fn display_rich_message(message: &Message) {
             }
             
             MessageContent::ToolUse { id, name, input } => {
-                println!("{}", "Tool Call".bright_cyan().bold());
+                println!("{}", "🔧 Tool Call".bright_cyan().bold());
                 println!("  {}: {}", "Name".bright_white().bold(), name.bright_yellow());
                 println!("  {}: {}", "ID".bright_white().bold(), id.dimmed());
                 
@@ -133,9 +293,9 @@ fn display_rich_message(message: &Message) {
             
             MessageContent::ToolResult { tool_use_id, content: tool_content, is_error } => {
                 let status_text = if is_error.unwrap_or(false) { 
-                    "Tool Result (ERROR)".bright_red().bold() 
+                    "❌ Tool Result (ERROR)".bright_red().bold() 
                 } else { 
-                    "Tool Result".bright_green().bold() 
+                    "✅ Tool Result".bright_green().bold() 
                 };
                 
                 println!("{}", status_text);
@@ -429,7 +589,7 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
     Ok(actor_id)
 }
 
-/// Run the chat loop
+/// Run the chat loop with conversation state tracking
 async fn run_chat_loop(
     connection: &mut TheaterConnection,
     actor_id: &str,
@@ -437,8 +597,10 @@ async fn run_chat_loop(
 ) -> Result<()> {
     let term = Term::stdout();
     let user_style = Style::new().cyan().bold();
-    let assistant_style = Style::new().green();
     let debug_style = Style::new().yellow().dim();
+
+    // Initialize conversation state tracking
+    let mut conversation_state = ConversationState::new(actor_id.to_string());
 
     loop {
         // Get user input
@@ -465,6 +627,7 @@ async fn run_chat_loop(
                     println!("  {} - Exit the program", "/exit".cyan());
                     println!("  {} - Clear the screen", "/clear".cyan());
                     println!("  {} - Show this help message", "/help".cyan());
+                    println!("  {} - Show conversation debug info", "/debug".cyan());
                     println!();
 
                     println!("\nCurrent settings:");
@@ -486,6 +649,17 @@ async fn run_chat_loop(
                         println!("  MCP Config File: {}", config_path.green());
                     } else {
                         println!("  MCP Config: {}", "Using default configuration".yellow());
+                    }
+                    println!();
+                    continue;
+                }
+                "/debug" => {
+                    println!("\nConversation State:");
+                    println!("  Actor ID: {}", conversation_state.actor_id.green());
+                    if let Some(ref head) = conversation_state.last_known_head {
+                        println!("  Last Known Head: {}", head.green());
+                    } else {
+                        println!("  Last Known Head: {}", "None".yellow());
                     }
                     println!();
                     continue;
@@ -522,25 +696,10 @@ async fn run_chat_loop(
             "message": message
         });
 
-        // Debug the raw JSON and bytes we're sending
         if args.debug {
-            println!("Raw JSON request: {}", add_message_request);
-            let bytes = serde_json::to_vec(&add_message_request)
-                .context("Failed to serialize for debug")?;
-            println!(
-                "First 50 bytes: {:?}",
-                &bytes[..std::cmp::min(50, bytes.len())]
-            );
-        }
-
-        if args.debug {
-            println!(
-                "{}",
-                debug_style.apply_to(format!(
-                    "DEBUG - Sending message request: {}",
-                    add_message_request
-                ))
-            );
+            println!("{}", debug_style.apply_to(format!(
+                "DEBUG - Sending message request: {}", add_message_request
+            )));
         }
 
         // Send the message to the actor
@@ -558,26 +717,17 @@ async fn run_chat_loop(
             let resp = connection.receive().await?;
 
             if args.debug {
-                println!(
-                    "{}",
-                    debug_style.apply_to(format!("DEBUG - Received response: {:?}", resp))
-                );
+                println!("{}", debug_style.apply_to(format!(
+                    "DEBUG - Received response: {:?}", resp
+                )));
             }
 
             match resp {
-                ManagementResponse::RequestedMessage { message, .. } => {
-                    if args.debug {
-                        println!(
-                            "RequestedMessage response: {}",
-                            String::from_utf8_lossy(&message)
-                        );
-                    }
+                ManagementResponse::RequestedMessage { .. } => {
                     break;
                 }
                 ManagementResponse::Error { error } => {
                     println!("Error from actor: {:?}", error);
-                    // Provide detailed debugging information
-                    println!("Error details: {:?}", error);
                     continue;
                 }
                 _ => {
@@ -607,13 +757,9 @@ async fn run_chat_loop(
         });
 
         if args.debug {
-            println!(
-                "{}",
-                debug_style.apply_to(format!(
-                    "DEBUG - Sending completion request: {}",
-                    generate_completion_request
-                ))
-            );
+            println!("{}", debug_style.apply_to(format!(
+                "DEBUG - Sending completion request: {}", generate_completion_request
+            )));
         }
 
         // Send the completion request to the actor
@@ -626,28 +772,25 @@ async fn run_chat_loop(
             .await
             .context("Failed to send completion request to actor")?;
 
-        // Wait for the completion response and print everything we get
-        let mut head_message_id = None;
+        // Wait for the completion response
+        let mut new_head = None;
         let mut error_occurred = false;
 
         loop {
             let resp = connection.receive().await?;
 
             if args.debug {
-                println!(
-                    "{}",
-                    debug_style
-                        .apply_to(format!("DEBUG - Received completion response: {:?}", resp))
-                );
+                println!("{}", debug_style.apply_to(format!(
+                    "DEBUG - Received completion response: {:?}", resp
+                )));
             }
 
             match &resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
                     match serde_json::from_slice::<serde_json::Value>(message) {
                         Ok(response_value) => {
-                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str())
-                            {
-                                head_message_id = Some(head.to_string());
+                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str()) {
+                                new_head = Some(head.to_string());
                                 break;
                             } else if let Some(error) = response_value.get("error") {
                                 pb.finish_and_clear();
@@ -656,7 +799,7 @@ async fn run_chat_loop(
                                 break;
                             } else {
                                 if args.debug {
-                                    println!("Full response: {}", response_value);
+                                    println!("Full completion response: {}", response_value);
                                 }
                             }
                         }
@@ -676,133 +819,39 @@ async fn run_chat_loop(
                     break;
                 }
                 _ => {
-                    // Just print and continue
                     if args.debug {
                         println!("Unexpected response: {:?}", resp);
                     }
                 }
             }
         }
+
+        pb.finish_and_clear();
 
         if error_occurred {
             continue;
         }
 
-        // If we didn't get a head message ID, continue to next input
-        let head_message_id = match head_message_id {
-            Some(id) => id,
-            None => {
-                pb.finish_and_clear();
-                println!("{}", "Failed to get head message ID".red());
-                continue;
-            }
-        };
-
-        // Get the response message using the head
-        let message_request = json!({
-            "type": "get_message",
-            "message_id": head_message_id
-        });
-
-        if args.debug {
-            println!(
-                "{}",
-                debug_style.apply_to(format!(
-                    "DEBUG - Sending message request: {}",
-                    message_request
-                ))
-            );
-        }
-
-        // Send the message request to the actor
-        connection
-            .send(ManagementCommand::RequestActorMessage {
-                id: actor_id_parsed.clone(),
-                data: serde_json::to_vec(&message_request)
-                    .context("Failed to serialize message request")?,
-            })
-            .await
-            .context("Failed to send message request to actor")?;
-
-        // Wait for the message response
-        let mut assistant_response: Option<String> = None;
-        let mut error_received = false;
-
-        while !error_received && assistant_response.is_none() {
-            let resp = connection.receive().await?;
-
-            if args.debug {
-                println!(
-                    "{}",
-                    debug_style.apply_to(format!("DEBUG - Received message response: {:?}", resp))
-                );
-            }
-
-            match &resp {
-                ManagementResponse::RequestedMessage { message, .. } => {
-                    match serde_json::from_slice::<serde_json::Value>(message) {
-                        Ok(response_value) => {
-                            match parse_and_display_message(&response_value, args.debug) {
-                                Ok(text_response) => {
-                                    assistant_response = text_response;
-                                    break;
-                                }
-                                Err(e) => {
-                                    pb.finish_and_clear();
-                                    println!("Error parsing message: {}", e);
-                                    if let Some(error) = response_value.get("error") {
-                                        println!("Server error: {}", error);
-                                    }
-                                    if args.debug {
-                                        println!("Full response: {:?}", response_value);
-                                    }
-                                    error_received = true;
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            pb.finish_and_clear();
-                            println!("Error parsing JSON response: {}", e);
-                            println!("Raw response: {}", String::from_utf8_lossy(message));
-                            error_received = true;
-                            break;
-                        }
-                    }
-                }
-                ManagementResponse::Error { error } => {
-                    pb.finish_and_clear();
-                    println!("Error from actor: {:?}", error);
-                    error_received = true;
-                }
-                _ => {
-                    // Just print and continue
+        // Display all new messages since our last known head
+        if let Some(head_id) = new_head {
+            match display_new_messages(&mut conversation_state, connection, &head_id, args).await {
+                Ok(()) => {
+                    // Success - messages displayed and head updated
                     if args.debug {
-                        println!("Unexpected response: {:?}", resp);
+                        println!("Successfully displayed new messages, head updated to: {}", head_id);
                     }
                 }
+                Err(e) => {
+                    println!("{}", format!("Error displaying messages: {}", e).red());
+                    // Still update head to avoid getting stuck
+                    conversation_state.update_head(head_id);
+                }
             }
-        }
-
-        // Stop the progress bar
-        pb.finish_and_clear();
-
-        if error_received {
-            continue;
-        }
-
-        // Print the assistant's response
-        if let Some(response_text) = assistant_response {
-            term.write_str("\n")?;
-            term.write_str(&format!("{} ", assistant_style.apply_to("Assistant:")))?;
-            term.write_str(&response_text)?;
-            term.write_str("\n\n")?;
         } else {
-            term.write_str("\n")?;
-            term.write_str(&format!("{} ", assistant_style.apply_to("Assistant:")))?;
-            term.write_str("Sorry, I couldn't generate a response.")?;
-            term.write_str("\n\n")?;
+            println!("{}", "Failed to get head message ID".red());
         }
+
+        println!(); // Add spacing after response
     }
 
     Ok(())
