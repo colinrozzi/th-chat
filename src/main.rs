@@ -241,10 +241,10 @@ async fn display_new_messages(
         }
 
         // Display role header
-        let role_display = match message.role.as_str() {
-            "user" => "User".cyan().bold(),
-            "assistant" => "Assistant".green().bold(),
-            _ => message.role.as_str().white().bold(),
+        let role_display = match message.role {
+            Role::User => "User".cyan().bold(),
+            Role::Assistant => "Assistant".green().bold(),
+            Role::System => "System".white().bold(),
         };
         
         println!("{}", role_display);
@@ -253,7 +253,7 @@ async fn display_new_messages(
         display_rich_message(message);
         
         if args.debug {
-            println!("{}", format!("Message role: {}", message.role).dimmed());
+            println!("{}", format!("Message role: {:?}", message.role).dimmed());
         }
     }
     
