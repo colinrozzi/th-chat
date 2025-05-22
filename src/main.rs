@@ -3,8 +3,8 @@ use clap::Parser;
 use colored::*;
 use console::{Style, Term};
 use genai_types::{messages::Role, Message, MessageContent};
-use mcp_protocol::tool::ToolContent;
 use indicatif::{ProgressBar, ProgressStyle};
+use mcp_protocol::tool::ToolContent;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self};
@@ -94,26 +94,30 @@ impl AppState {
     async fn cleanup(&self) -> Result<()> {
         if let Some(ref actor_id) = self.actor_id {
             println!("{}", "\nCleaning up actor...".yellow());
-            
-            let actor_id_parsed: TheaterId = actor_id.parse()
+
+            let actor_id_parsed: TheaterId = actor_id
+                .parse()
                 .context("Failed to parse actor ID for cleanup")?;
-            
+
             let mut connection = self.connection.lock().await;
-            
+
             // Send stop actor command
-            if let Err(e) = connection.send(ManagementCommand::StopActor {
-                id: actor_id_parsed,
-            }).await {
+            if let Err(e) = connection
+                .send(ManagementCommand::StopActor {
+                    id: actor_id_parsed,
+                })
+                .await
+            {
                 eprintln!("Warning: Failed to send stop actor command: {}", e);
                 return Ok(()); // Don't fail cleanup on communication error
             }
-            
+
             // Wait for confirmation with timeout
             let cleanup_timeout = tokio::time::timeout(
                 Duration::from_secs(5),
-                self.wait_for_stop_confirmation(&mut connection)
+                self.wait_for_stop_confirmation(&mut connection),
             );
-            
+
             match cleanup_timeout.await {
                 Ok(Ok(())) => {
                     println!("{}", "Actor stopped successfully".green());
@@ -128,7 +132,7 @@ impl AppState {
         }
         Ok(())
     }
-    
+
     async fn wait_for_stop_confirmation(&self, connection: &mut TheaterConnection) -> Result<()> {
         loop {
             let response = connection.receive().await?;
@@ -178,7 +182,7 @@ impl ConversationState {
     ) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
         let mut current_id = Some(new_head.to_string());
-        
+
         // Traverse backwards from new head until we reach our last known head (or the beginning)
         while let Some(id) = current_id {
             // Skip if this is our last known head (we don't want to re-display it)
@@ -214,8 +218,9 @@ impl ConversationState {
         message_id: &str,
         args: &Args,
     ) -> Result<Option<ChatMessage>> {
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
-        
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
         let message_request = json!({
             "type": "get_message",
             "message_id": message_id
@@ -254,8 +259,9 @@ impl ConversationState {
                         Ok(response_value) => {
                             // Check if we got a chat_message response
                             if let Some(message_obj) = response_value.get("message") {
-                                let chat_message: ChatMessage = serde_json::from_value(message_obj.clone())
-                                    .context("Failed to deserialize chat message")?;
+                                let chat_message: ChatMessage =
+                                    serde_json::from_value(message_obj.clone())
+                                        .context("Failed to deserialize chat message")?;
                                 return Ok(Some(chat_message));
                             }
                             // Check for error response
@@ -306,8 +312,10 @@ async fn display_new_messages(
     new_head: &str,
     args: &Args,
 ) -> Result<()> {
-    let new_messages = conversation_state.get_new_messages(connection, new_head, args).await?;
-    
+    let new_messages = conversation_state
+        .get_new_messages(connection, new_head, args)
+        .await?;
+
     if new_messages.is_empty() {
         if args.debug {
             println!("{}", "No new messages to display".yellow());
@@ -316,7 +324,7 @@ async fn display_new_messages(
     }
 
     println!(); // Add spacing before messages
-    
+
     for (i, message) in new_messages.iter().enumerate() {
         // Add separator between messages (except for the first one)
         if i > 0 {
@@ -329,20 +337,20 @@ async fn display_new_messages(
             Role::Assistant => "Assistant".green().bold(),
             Role::System => "System".white().bold(),
         };
-        
+
         println!("{}", role_display);
-        
+
         // Display the message content
         display_rich_message(message);
-        
+
         if args.debug {
             println!("{}", format!("Message role: {:?}", message.role).dimmed());
         }
     }
-    
+
     // Update our tracked head
     conversation_state.update_head(new_head.to_string());
-    
+
     Ok(())
 }
 
@@ -353,12 +361,14 @@ fn display_rich_message(message: &Message) {
             MessageContent::Text { text } => {
                 println!("{}", text);
             }
-            
-            MessageContent::ToolUse { id, name, input } => {
+
+            MessageContent::ToolUse { id: _, name, input } => {
                 println!("{}", "🔧 Tool Call".bright_cyan().bold());
-                println!("  {}: {}", "Name".bright_white().bold(), name.bright_yellow());
-                println!("  {}: {}", "ID".bright_white().bold(), id.dimmed());
-                
+                println!(
+                    "  {}: {}",
+                    "Name".bright_white().bold(),
+                    name.bright_yellow()
+                );
                 // Pretty print the input parameters
                 if let Ok(pretty_input) = serde_json::to_string_pretty(input) {
                     println!("  {}:", "Parameters".bright_white().bold());
@@ -373,34 +383,50 @@ fn display_rich_message(message: &Message) {
                 }
                 println!();
             }
-            
-            MessageContent::ToolResult { tool_use_id, content: tool_content, is_error } => {
-                let status_text = if is_error.unwrap_or(false) { 
-                    "❌ Tool Result (ERROR)".bright_red().bold() 
-                } else { 
-                    "✅ Tool Result".bright_green().bold() 
-                };
-                
-                println!("{}", status_text);
-                println!("  {}: {}", "Tool Use ID".bright_white().bold(), tool_use_id.dimmed());
-                
-                // Display tool result content
+
+            MessageContent::ToolResult {
+                tool_use_id: _tool_use_id,
+                content: tool_content,
+                is_error,
+            } => {
+                if is_error.is_some() {
+                    println!("{}", "🔧 Tool Error".bright_red().bold());
+                }
                 for result_content in tool_content {
                     match result_content {
                         ToolContent::Text { text } => {
-                            println!("  {}:", "Output".bright_white().bold());
-                            for line in text.lines() {
-                                println!("    {}", line);
-                            }
+                            // print an abbreviated version of the text
+                            let abbreviated_text = if text.len() > 50 {
+                                format!("{}...", &text[..50])
+                            } else {
+                                text.clone()
+                            };
+                            println!(
+                                "  {}: {}",
+                                "Output".bright_white().bold(),
+                                abbreviated_text.cyan()
+                            );
                         }
                         ToolContent::Image { .. } => {
-                            println!("  {}: {}", "Output".bright_white().bold(), "[Image content]".italic().dimmed());
+                            println!(
+                                "  {}: {}",
+                                "Output".bright_white().bold(),
+                                "[Image content]".italic().dimmed()
+                            );
                         }
                         ToolContent::Resource { .. } => {
-                            println!("  {}: {}", "Output".bright_white().bold(), "[Resource content]".italic().dimmed());
+                            println!(
+                                "  {}: {}",
+                                "Output".bright_white().bold(),
+                                "[Resource content]".italic().dimmed()
+                            );
                         }
                         ToolContent::Audio { .. } => {
-                            println!("  {}: {}", "Output".bright_white().bold(), "[Audio content]".italic().dimmed());
+                            println!(
+                                "  {}: {}",
+                                "Output".bright_white().bold(),
+                                "[Audio content]".italic().dimmed()
+                            );
                         }
                     }
                 }
@@ -413,7 +439,7 @@ fn display_rich_message(message: &Message) {
 /// Extract just the text content from a Message for simple text return
 fn extract_text_content(message: &Message) -> Option<String> {
     let mut full_text = String::new();
-    
+
     for content in &message.content {
         if let MessageContent::Text { text } = content {
             if !full_text.is_empty() {
@@ -422,7 +448,7 @@ fn extract_text_content(message: &Message) -> Option<String> {
             full_text.push_str(text);
         }
     }
-    
+
     if full_text.is_empty() {
         None
     } else {
@@ -435,7 +461,7 @@ fn display_message_summary(message: &Message) {
     let mut text_count = 0;
     let mut tool_use_count = 0;
     let mut tool_result_count = 0;
-    
+
     for content in &message.content {
         match content {
             MessageContent::Text { .. } => text_count += 1,
@@ -443,7 +469,7 @@ fn display_message_summary(message: &Message) {
             MessageContent::ToolResult { .. } => tool_result_count += 1,
         }
     }
-    
+
     println!("{}", "Message Summary:".bright_blue().bold());
     if text_count > 0 {
         println!("  Text blocks: {}", text_count);
@@ -480,7 +506,7 @@ async fn main() -> Result<()> {
 
     // Create shared app state for cleanup
     let app_state = Arc::new(Mutex::new(AppState::new(connection)));
-    
+
     // Set up signal handler for graceful shutdown
     let app_state_signal = app_state.clone();
     tokio::spawn(async move {
@@ -488,15 +514,15 @@ async fn main() -> Result<()> {
             eprintln!("Failed to listen for shutdown signal: {}", e);
             return;
         }
-        
+
         println!("\n{}", "Received shutdown signal...".yellow());
-        
+
         // Perform cleanup
         let state = app_state_signal.lock().await;
         if let Err(e) = state.cleanup().await {
             eprintln!("Error during cleanup: {}", e);
         }
-        
+
         std::process::exit(0);
     });
 
@@ -506,15 +532,15 @@ async fn main() -> Result<()> {
         let mut state = app_state.lock().await;
         let connection = state.connection.clone();
         let mut conn = connection.lock().await;
-        
+
         match start_chat_state_actor(&mut conn, &args).await {
             Ok(actor_id) => {
                 println!("{}", "Chat-state actor started".green());
-                
+
                 // Store actor ID for cleanup
                 drop(conn); // Release connection lock
                 state.set_actor_id(actor_id.clone());
-                
+
                 actor_id
             }
             Err(e) => {
@@ -545,17 +571,17 @@ async fn main() -> Result<()> {
         let state = app_state.lock().await;
         let connection = state.connection.clone();
         drop(state); // Release app state lock
-        
+
         run_chat_loop(connection, &actor_id, &args).await
     };
-    
+
     // Cleanup on normal exit
     println!("{}", "Cleaning up before exit...".yellow());
     let state = app_state.lock().await;
     if let Err(e) = state.cleanup().await {
         eprintln!("Error during cleanup: {}", e);
     }
-    
+
     result
 }
 
@@ -827,9 +853,13 @@ async fn run_chat_loop(
         });
 
         if args.debug {
-            println!("{}", debug_style.apply_to(format!(
-                "DEBUG - Sending message request: {}", add_message_request
-            )));
+            println!(
+                "{}",
+                debug_style.apply_to(format!(
+                    "DEBUG - Sending message request: {}",
+                    add_message_request
+                ))
+            );
         }
 
         // Send the message to the actor
@@ -852,9 +882,10 @@ async fn run_chat_loop(
             };
 
             if args.debug {
-                println!("{}", debug_style.apply_to(format!(
-                    "DEBUG - Received response: {:?}", resp
-                )));
+                println!(
+                    "{}",
+                    debug_style.apply_to(format!("DEBUG - Received response: {:?}", resp))
+                );
             }
 
             match resp {
@@ -892,9 +923,13 @@ async fn run_chat_loop(
         });
 
         if args.debug {
-            println!("{}", debug_style.apply_to(format!(
-                "DEBUG - Sending completion request: {}", generate_completion_request
-            )));
+            println!(
+                "{}",
+                debug_style.apply_to(format!(
+                    "DEBUG - Sending completion request: {}",
+                    generate_completion_request
+                ))
+            );
         }
 
         // Send the completion request to the actor
@@ -920,16 +955,19 @@ async fn run_chat_loop(
             };
 
             if args.debug {
-                println!("{}", debug_style.apply_to(format!(
-                    "DEBUG - Received completion response: {:?}", resp
-                )));
+                println!(
+                    "{}",
+                    debug_style
+                        .apply_to(format!("DEBUG - Received completion response: {:?}", resp))
+                );
             }
 
             match &resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
                     match serde_json::from_slice::<serde_json::Value>(message) {
                         Ok(response_value) => {
-                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str()) {
+                            if let Some(head) = response_value.get("head").and_then(|h| h.as_str())
+                            {
                                 new_head = Some(head.to_string());
                                 break;
                             } else if let Some(error) = response_value.get("error") {
@@ -978,7 +1016,10 @@ async fn run_chat_loop(
                 Ok(()) => {
                     // Success - messages displayed and head updated
                     if args.debug {
-                        println!("Successfully displayed new messages, head updated to: {}", head_id);
+                        println!(
+                            "Successfully displayed new messages, head updated to: {}",
+                            head_id
+                        );
                     }
                 }
                 Err(e) => {
@@ -993,7 +1034,7 @@ async fn run_chat_loop(
 
         println!(); // Add spacing after response
     }
-    
+
     // This should be unreachable due to the loop, but we need it for the compiler
     // Ok(())
 }
