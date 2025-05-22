@@ -441,10 +441,10 @@ impl App {
             .collect();
     }
     
-    /// Auto-scroll to bottom after adding messages
+    /// Auto-scroll to bottom after adding messages (keep at bottom by default)
     fn auto_scroll_to_bottom(&mut self) {
-        self.vertical_scroll = self.messages.len().saturating_sub(1);
-        self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+        self.vertical_scroll = 0; // 0 means show most recent messages
+        self.scroll_state = self.scroll_state.position(0);
     }
     
     /// Clear the conversation (reset chain state)
@@ -461,27 +461,28 @@ impl App {
         self.messages.push(message);
         self.messages_state = self.messages.len().saturating_sub(1);
         self.update_scroll();
-        // Auto-scroll to bottom
-        self.vertical_scroll = self.messages.len().saturating_sub(1);
-        self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+        // Keep at bottom to show new messages
+        self.auto_scroll_to_bottom();
     }
 
     /// Update scroll state based on messages
     pub fn update_scroll(&mut self) {
-        self.scroll_state = self.scroll_state.content_length(self.messages.len());
+        let max_scroll = self.messages.len().saturating_sub(1);
+        self.scroll_state = self.scroll_state.content_length(max_scroll + 1);
     }
 
-    /// Scroll messages up
+    /// Scroll messages up (to see older messages)
     pub fn scroll_up(&mut self) {
-        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-        self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+        let max_scroll = self.messages.len().saturating_sub(1);
+        if self.vertical_scroll < max_scroll {
+            self.vertical_scroll += 1;
+            self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+        }
     }
 
-    /// Scroll messages down
+    /// Scroll messages down (to see newer messages)
     pub fn scroll_down(&mut self) {
-        if self.vertical_scroll < self.messages.len().saturating_sub(1) {
-            self.vertical_scroll += 1;
-        }
+        self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
         self.scroll_state = self.scroll_state.position(self.vertical_scroll);
     }
 

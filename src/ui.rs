@@ -62,11 +62,28 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         .title("Chat")
         .title_style(Style::default().fg(Color::Yellow));
 
+    // Calculate how many messages can fit in the available area
+    let available_height = area.height.saturating_sub(2) as usize; // subtract borders
+    
+    // Calculate which messages to show
+    let total_messages = app.messages.len();
+    let start_index = if total_messages <= available_height {
+        // If all messages fit, show them all
+        0
+    } else {
+        // Show the most recent messages that fit, accounting for scroll offset
+        let max_start = total_messages.saturating_sub(available_height);
+        (max_start.saturating_sub(app.vertical_scroll)).min(max_start)
+    };
+    
+    let end_index = (start_index + available_height).min(total_messages);
+
     let messages: Vec<ListItem> = app
         .messages
         .iter()
         .enumerate()
-        .skip(app.vertical_scroll)
+        .skip(start_index)
+        .take(end_index - start_index)
         .map(|(_, chat_msg)| {
             let content = match &chat_msg.message.content[0] {
                 MessageContent::Text { text } => text.clone(),
