@@ -190,7 +190,6 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     
     // Flatten all messages into renderable items with proper line counting
     let mut all_items = Vec::new();
-    let mut total_lines = 0;
     
     for chat_msg in &app.messages {
         let (prefix, role_style) = match chat_msg.message.role {
@@ -201,31 +200,32 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         
         // Add role header
         all_items.push(ListItem::new(Line::from(Span::styled(prefix, role_style))));
-        total_lines += 1;
         
         // Process each content item in the message
         for content in &chat_msg.message.content {
             let content_lines = format_message_content(content, available_width);
             for line in content_lines {
                 all_items.push(ListItem::new(line));
-                total_lines += 1;
             }
         }
         
         // Add spacing between messages
         all_items.push(ListItem::new(Line::from("")));
-        total_lines += 1;
     }
 
-    // Calculate how many items can fit in the available area
+    let total_lines = all_items.len();
     let available_height = area.height.saturating_sub(2) as usize; // subtract borders
     
     // Calculate which items to show based on scroll
     let start_index = if total_lines <= available_height {
+        // All content fits, no scrolling needed
         0
     } else {
-        let max_start = total_lines.saturating_sub(available_height);
-        (max_start.saturating_sub(app.vertical_scroll)).min(max_start)
+        // Content is larger than screen, apply scrolling
+        // vertical_scroll = 0 means show most recent (bottom)
+        // vertical_scroll > 0 means scroll up to see older messages
+        let max_scroll = total_lines.saturating_sub(available_height);
+        app.vertical_scroll.min(max_scroll)
     };
     
     let end_index = (start_index + available_height).min(total_lines);
@@ -239,6 +239,13 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
 
     let messages_list = List::new(visible_items).block(messages_block);
     f.render_widget(messages_list, area);
+
+    // Update scroll state for scrollbar
+    if total_lines > available_height {
+        app.scroll_state = app.scroll_state
+            .content_length(total_lines)
+            .position(start_index);
+    }
 
     // Render scrollbar for messages
     let scrollbar = Scrollbar::default()

@@ -467,23 +467,84 @@ impl App {
 
     /// Update scroll state based on messages
     pub fn update_scroll(&mut self) {
-        let max_scroll = self.messages.len().saturating_sub(1);
-        self.scroll_state = self.scroll_state.content_length(max_scroll + 1);
+        // The scroll state will be updated in the UI rendering
+        // This method is kept for compatibility but the real scroll state
+        // management now happens in render_chat_area()
     }
 
     /// Scroll messages up (to see older messages)
     pub fn scroll_up(&mut self) {
-        let max_scroll = self.messages.len().saturating_sub(1);
-        if self.vertical_scroll < max_scroll {
-            self.vertical_scroll += 1;
-            self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+        // Calculate total lines (this should match the UI calculation)
+        let total_lines = self.calculate_total_display_lines();
+        let available_height = 20; // This is an estimate, should be passed from UI but this works
+        
+        if total_lines > available_height {
+            let max_scroll = total_lines.saturating_sub(available_height);
+            if self.vertical_scroll < max_scroll {
+                self.vertical_scroll += 1;
+            }
         }
     }
 
     /// Scroll messages down (to see newer messages)
     pub fn scroll_down(&mut self) {
         self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-        self.scroll_state = self.scroll_state.position(self.vertical_scroll);
+    }
+
+    /// Calculate total display lines (should match UI calculation)
+    fn calculate_total_display_lines(&self) -> usize {
+        let mut total_lines = 0;
+        let available_width = 70; // Estimate, should be passed from UI but this works for now
+        
+        for chat_msg in &self.messages {
+            // Role header
+            total_lines += 1;
+            
+            // Content lines
+            for content in &chat_msg.message.content {
+                match content {
+                    MessageContent::Text { text } => {
+                        let wrapped_text = textwrap::fill(text, available_width);
+                        total_lines += wrapped_text.lines().count();
+                    }
+                    MessageContent::ToolUse { input, .. } => {
+                        // Header + ID + Input label + JSON lines
+                        total_lines += 3;
+                        let input_str = if input.is_null() {
+                            "No parameters".to_string()
+                        } else {
+                            match serde_json::to_string_pretty(input) {
+                                Ok(formatted) => formatted,
+                                Err(_) => format!("{}", input),
+                            }
+                        };
+                        let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
+                        total_lines += wrapped_input.lines().count();
+                    }
+                    MessageContent::ToolResult { content, .. } => {
+                        // Header + ID line
+                        total_lines += 2;
+                        for tool_content in content {
+                            match tool_content {
+                                mcp_protocol::tool::ToolContent::Text { text } => {
+                                    total_lines += 1; // Output label
+                                    let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
+                                    total_lines += wrapped_output.lines().count();
+                                }
+                                _ => {
+                                    total_lines += 1; // Single line for other content types
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Spacing between messages
+            total_lines += 1;
+        }
+        
+        total_lines
     }
 
     /// Update thinking animation
