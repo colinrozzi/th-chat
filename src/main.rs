@@ -9,10 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{self};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use theater::client::TheaterConnection;
 use theater::id::TheaterId;
 use theater::theater_server::{ManagementCommand, ManagementResponse};
+use tokio::signal;
+use tokio::sync::Mutex;
 
 /// Command line arguments
 #[derive(Parser, Debug)]
@@ -70,6 +73,81 @@ struct ConversationState {
     last_known_head: Option<String>,
 }
 
+/// Shared state for cleanup on shutdown
+struct AppState {
+    connection: Arc<Mutex<TheaterConnection>>,
+    actor_id: Option<String>,
+}
+
+impl AppState {
+    fn new(connection: TheaterConnection) -> Self {
+        Self {
+            connection: Arc::new(Mutex::new(connection)),
+            actor_id: None,
+        }
+    }
+
+    fn set_actor_id(&mut self, actor_id: String) {
+        self.actor_id = Some(actor_id);
+    }
+
+    async fn cleanup(&self) -> Result<()> {
+        if let Some(ref actor_id) = self.actor_id {
+            println!("{}", "\nCleaning up actor...".yellow());
+            
+            let actor_id_parsed: TheaterId = actor_id.parse()
+                .context("Failed to parse actor ID for cleanup")?;
+            
+            let mut connection = self.connection.lock().await;
+            
+            // Send stop actor command
+            if let Err(e) = connection.send(ManagementCommand::StopActor {
+                id: actor_id_parsed,
+            }).await {
+                eprintln!("Warning: Failed to send stop actor command: {}", e);
+                return Ok(()); // Don't fail cleanup on communication error
+            }
+            
+            // Wait for confirmation with timeout
+            let cleanup_timeout = tokio::time::timeout(
+                Duration::from_secs(5),
+                self.wait_for_stop_confirmation(&mut connection)
+            );
+            
+            match cleanup_timeout.await {
+                Ok(Ok(())) => {
+                    println!("{}", "Actor stopped successfully".green());
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Warning: Error during actor cleanup: {}", e);
+                }
+                Err(_) => {
+                    eprintln!("Warning: Actor cleanup timed out");
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    async fn wait_for_stop_confirmation(&self, connection: &mut TheaterConnection) -> Result<()> {
+        loop {
+            let response = connection.receive().await?;
+            match response {
+                ManagementResponse::ActorStopped { .. } => {
+                    break;
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error stopping actor: {:?}", error));
+                }
+                _ => {
+                    // Continue waiting for the stop confirmation
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Chat message structure matching the chat-state actor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatMessage {
@@ -94,7 +172,7 @@ impl ConversationState {
     /// Get all new messages since our last known head
     async fn get_new_messages(
         &self,
-        connection: &mut TheaterConnection,
+        connection: &Arc<Mutex<TheaterConnection>>,
         new_head: &str,
         args: &Args,
     ) -> Result<Vec<Message>> {
@@ -132,7 +210,7 @@ impl ConversationState {
     /// Get a specific message by ID from the chat-state actor
     async fn get_message_by_id(
         &self,
-        connection: &mut TheaterConnection,
+        connection: &Arc<Mutex<TheaterConnection>>,
         message_id: &str,
         args: &Args,
     ) -> Result<Option<ChatMessage>> {
@@ -148,18 +226,23 @@ impl ConversationState {
         }
 
         // Send the message request
-        connection
-            .send(ManagementCommand::RequestActorMessage {
+        {
+            let mut conn = connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
                 id: actor_id_parsed,
                 data: serde_json::to_vec(&message_request)
                     .context("Failed to serialize message request")?,
             })
             .await
             .context("Failed to send message request to actor")?;
+        }
 
         // Wait for response
         loop {
-            let resp = connection.receive().await?;
+            let resp = {
+                let mut conn = connection.lock().await;
+                conn.receive().await?
+            };
 
             if args.debug {
                 println!("DEBUG - Received message response: {:?}", resp);
@@ -219,7 +302,7 @@ fn read_mcp_config(path: &str) -> Result<Vec<serde_json::Value>> {
 /// Display all new messages in the conversation
 async fn display_new_messages(
     conversation_state: &mut ConversationState,
-    connection: &mut TheaterConnection,
+    connection: &Arc<Mutex<TheaterConnection>>,
     new_head: &str,
     args: &Args,
 ) -> Result<()> {
@@ -390,43 +473,90 @@ async fn main() -> Result<()> {
 
     // Connect to the Theater server
     println!("{}", "Connecting to Theater server...".cyan());
-    let mut connection = connect_to_theater(server_address)
+    let connection = connect_to_theater(server_address)
         .await
         .context("Failed to connect to Theater server")?;
     println!("{}", "Connected to Theater server".green());
 
+    // Create shared app state for cleanup
+    let app_state = Arc::new(Mutex::new(AppState::new(connection)));
+    
+    // Set up signal handler for graceful shutdown
+    let app_state_signal = app_state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = signal::ctrl_c().await {
+            eprintln!("Failed to listen for shutdown signal: {}", e);
+            return;
+        }
+        
+        println!("\n{}", "Received shutdown signal...".yellow());
+        
+        // Perform cleanup
+        let state = app_state_signal.lock().await;
+        if let Err(e) = state.cleanup().await {
+            eprintln!("Error during cleanup: {}", e);
+        }
+        
+        std::process::exit(0);
+    });
+
     // Start the chat-state actor
     println!("{}", "Starting chat-state actor...".cyan());
-    match start_chat_state_actor(&mut connection, &args).await {
-        Ok(actor_id) => {
-            println!("{}", "Chat-state actor started".green());
-
-            // Print welcome message
-            println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
-            println!(
-                "{}",
-                format!(
-                    "Using {} via {}",
-                    args.model.to_string().yellow().bold(),
-                    args.provider.yellow().bold()
-                )
-            );
-            println!(
-                "{}",
-                "Type your messages (Ctrl+C to exit, /help for commands)".cyan()
-            );
-            println!();
-
-            // Enter REPL loop
-            run_chat_loop(&mut connection, &actor_id, &args).await?;
+    let actor_id = {
+        let mut state = app_state.lock().await;
+        let connection = state.connection.clone();
+        let mut conn = connection.lock().await;
+        
+        match start_chat_state_actor(&mut conn, &args).await {
+            Ok(actor_id) => {
+                println!("{}", "Chat-state actor started".green());
+                
+                // Store actor ID for cleanup
+                drop(conn); // Release connection lock
+                state.set_actor_id(actor_id.clone());
+                
+                actor_id
+            }
+            Err(e) => {
+                println!("  {}", e.to_string().red());
+                return Ok(());
+            }
         }
-        Err(e) => {
-            // Print a user-friendly error message with suggestions for fixing common issues
-            println!("  {}", e.to_string().red());
-        }
+    };
+
+    // Print welcome message
+    println!("\n{}", "🎭 Theater Chat".bright_blue().bold());
+    println!(
+        "{}",
+        format!(
+            "Using {} via {}",
+            args.model.to_string().yellow().bold(),
+            args.provider.yellow().bold()
+        )
+    );
+    println!(
+        "{}",
+        "Type your messages (Ctrl+C to exit, /help for commands)".cyan()
+    );
+    println!();
+
+    // Enter REPL loop
+    let result = {
+        let state = app_state.lock().await;
+        let connection = state.connection.clone();
+        drop(state); // Release app state lock
+        
+        run_chat_loop(connection, &actor_id, &args).await
+    };
+    
+    // Cleanup on normal exit
+    println!("{}", "Cleaning up before exit...".yellow());
+    let state = app_state.lock().await;
+    if let Err(e) = state.cleanup().await {
+        eprintln!("Error during cleanup: {}", e);
     }
-
-    Ok(())
+    
+    result
 }
 
 /// Connect to the Theater server
@@ -591,7 +721,7 @@ async fn start_chat_state_actor(connection: &mut TheaterConnection, args: &Args)
 
 /// Run the chat loop with conversation state tracking
 async fn run_chat_loop(
-    connection: &mut TheaterConnection,
+    connection: Arc<Mutex<TheaterConnection>>,
     actor_id: &str,
     args: &Args,
 ) -> Result<()> {
@@ -616,7 +746,7 @@ async fn run_chat_loop(
             match input {
                 "/exit" => {
                     println!("Exiting...");
-                    break;
+                    return Ok(()); // This will trigger cleanup in main
                 }
                 "/clear" => {
                     term.clear_screen()?;
@@ -703,18 +833,23 @@ async fn run_chat_loop(
         }
 
         // Send the message to the actor
-        connection
-            .send(ManagementCommand::RequestActorMessage {
+        {
+            let mut conn = connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
                 id: actor_id_parsed.clone(),
                 data: serde_json::to_vec(&add_message_request)
                     .context("Failed to serialize message request")?,
             })
             .await
             .context("Failed to send message to actor")?;
+        }
 
         // Wait for the request response
         loop {
-            let resp = connection.receive().await?;
+            let resp = {
+                let mut conn = connection.lock().await;
+                conn.receive().await?
+            };
 
             if args.debug {
                 println!("{}", debug_style.apply_to(format!(
@@ -763,21 +898,26 @@ async fn run_chat_loop(
         }
 
         // Send the completion request to the actor
-        connection
-            .send(ManagementCommand::RequestActorMessage {
+        {
+            let mut conn = connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
                 id: actor_id_parsed.clone(),
                 data: serde_json::to_vec(&generate_completion_request)
                     .context("Failed to serialize completion request")?,
             })
             .await
             .context("Failed to send completion request to actor")?;
+        }
 
         // Wait for the completion response
         let mut new_head = None;
         let mut error_occurred = false;
 
         loop {
-            let resp = connection.receive().await?;
+            let resp = {
+                let mut conn = connection.lock().await;
+                conn.receive().await?
+            };
 
             if args.debug {
                 println!("{}", debug_style.apply_to(format!(
@@ -834,7 +974,7 @@ async fn run_chat_loop(
 
         // Display all new messages since our last known head
         if let Some(head_id) = new_head {
-            match display_new_messages(&mut conversation_state, connection, &head_id, args).await {
+            match display_new_messages(&mut conversation_state, &connection, &head_id, args).await {
                 Ok(()) => {
                     // Success - messages displayed and head updated
                     if args.debug {
@@ -853,6 +993,7 @@ async fn run_chat_loop(
 
         println!(); // Add spacing after response
     }
-
-    Ok(())
+    
+    // This should be unreachable due to the loop, but we need it for the compiler
+    // Ok(())
 }
