@@ -449,6 +449,61 @@ impl ChatManager {
         Ok(messages)
     }
 
+    pub async fn send_message(&mut self, message: String) -> Result<()> {
+        info!("Sending message: {}", message);
+
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
+        let message_obj = Message {
+            role: Role::User,
+            content: vec![MessageContent::Text { text: message }],
+        };
+
+        let add_message_request = json!({
+            "type": "add_message",
+            "message": message_obj
+        });
+
+        // Send the message
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed.clone(),
+                data: serde_json::to_vec(&add_message_request)
+                    .context("Failed to serialize message request")?,
+            })
+            .await
+            .context("Failed to send message to actor")?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn request_generation(&mut self) -> Result<()> {
+        info!("Requesting message generation");
+
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
+        let generate_request = json!({
+            "type": "generate_completion"
+        });
+
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&generate_request)
+                    .context("Failed to serialize generate request")?,
+            })
+            .await
+            .context("Failed to send generate request")?;
+        }
+
+        Ok(())
+    }
+
     /// Send a message and return the new head (don't fetch messages here)
     pub async fn send_message_get_head(&mut self, message: String) -> Result<String> {
         info!("Sending message and getting new head");

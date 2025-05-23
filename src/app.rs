@@ -174,33 +174,8 @@ impl App {
                                     if message.starts_with('/') {
                                         self.handle_command(&message[1..]);
                                     } else {
-                                        // Send message and sync
-                                        self.waiting_for_response = true;
-
-                                        match chat_manager.send_message_get_head(message).await {
-                                            Ok(_new_head) => {
-                                                // Sync to get the new messages
-                                                if let Err(e) = self.sync_with_chat_state(chat_manager).await {
-                                                    error!("Failed to sync after sending message: {:?}", e);
-                                                }
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to send message: {:?}", e);
-                                                let error_message = ChatMessage::from_message(
-                                                    Some(format!("error-{}", Uuid::new_v4())),
-                                                    None,
-                                                    Message {
-                                                        role: Role::System,
-                                                        content: vec![MessageContent::Text {
-                                                            text: format!("Error: {}", e),
-                                                        }],
-                                                    },
-                                                );
-                                                self.add_message_to_chain(error_message);
-                                            }
-                                        }
-
-                                        self.waiting_for_response = false;
+                                        chat_manager.send_message(message.clone()).await?;
+                                        chat_manager.request_generation().await?;
                                     }
                                 }
                             }
@@ -382,9 +357,11 @@ impl App {
     fn process_channel_message(&mut self, payload: ChatStateResponse) -> Result<()> {
         match payload {
             ChatStateResponse::ChatMessage { message } => {
+                info!("Received chat message: {:?}", message);
                 self.add_message_to_chain(message);
             }
             ChatStateResponse::Head { head } => {
+                info!("Received head update: {:?}", head);
                 self.client_head = head;
             }
             ChatStateResponse::Error { error } => {
