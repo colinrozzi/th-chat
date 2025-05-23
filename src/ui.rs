@@ -11,11 +11,63 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode};
-
-use crate::config::Args;
+use crate::config::{Args, LoadingState};
 
 /// Render the main user interface
 pub fn render(f: &mut Frame, app: &mut App, args: &Args) {
+    if app.is_loading {
+        render_loading_screen(f, app, args);
+    } else {
+        render_chat_screen(f, app, args);
+    }
+}
+
+/// Render the loading screen
+pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &Args) {
+    let area = f.area();
+    
+    // Create main layout
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Title
+            Constraint::Min(5),     // Loading content
+            Constraint::Length(3),  // Footer
+        ])
+        .split(area);
+
+    // Title
+    let title = Paragraph::new("th-chat - Loading")
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(title, chunks[0]);
+
+    // Loading content
+    if let Some(loading_state) = &app.loading_state {
+        let loading_text = vec![
+            Line::from(""),
+            Line::from(loading_state.message()),
+            Line::from(""),
+            Line::from("Please wait..."),
+        ];
+        
+        let loading_paragraph = Paragraph::new(loading_text)
+            .style(Style::default().fg(Color::White))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title("Status"));
+        f.render_widget(loading_paragraph, chunks[1]);
+    }
+
+    // Footer
+    let footer = Paragraph::new("Press Ctrl+C to cancel")
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    f.render_widget(footer, chunks[2]);
+}
+
+/// Render the main chat screen
+pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &Args) {
     let size = f.area();
 
     // Create main layout

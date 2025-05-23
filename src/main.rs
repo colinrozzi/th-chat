@@ -16,7 +16,7 @@ mod config;
 mod ui;
 
 use app::App;
-use config::Args;
+use config::{Args, LoadingState, CHAT_STATE_ACTOR_MANIFEST};
 
 fn setup_logging() -> Result<()> {
     // Create logs directory if it doesn't exist
@@ -86,28 +86,67 @@ async fn run_app(
 ) -> Result<()> {
     info!("Starting run_app with server: {}", args.server);
 
-    // Update app connection status during initialization
-    app.set_connection_status("Connecting...".to_string());
-    info!("Set connection status to 'Connecting...'");
+    // Start with loading screen
+    app.set_loading_state(LoadingState::ConnectingToServer(args.server.clone()));
+    terminal.draw(|f| ui::render(f, &mut app, &args))?;
 
-    // Initialize the chat system
-    info!("Initializing chat manager...");
-    let mut chat_manager = match chat::ChatManager::new(&args).await {
-        Ok(manager) => {
-            info!("Chat manager initialized successfully");
-            manager
+    // Step 1: Connect to server
+    info!("Connecting to Theater server...");
+    let mut connection = match chat::ChatManager::connect_to_server(&args).await {
+        Ok(conn) => {
+            info!("Connected to Theater server successfully");
+            conn
         }
         Err(e) => {
-            error!("Failed to initialize chat manager: {:?}", e);
+            error!("Failed to connect to server: {:?}", e);
             return Err(e);
         }
     };
 
-    // Update status to ready
-    app.set_connection_status("Ready".to_string());
-    info!("Set connection status to 'Ready'");
+    // Step 2: Start actor
+    app.set_loading_state(LoadingState::StartingActor(CHAT_STATE_ACTOR_MANIFEST.to_string()));
+    terminal.draw(|f| ui::render(f, &mut app, &args))?;
+    
+    info!("Starting chat-state actor...");
+    let actor_id = match chat::ChatManager::start_actor(&mut connection, &args).await {
+        Ok(id) => {
+            info!("Actor started successfully: {:?}", id);
+            id
+        }
+        Err(e) => {
+            error!("Failed to start actor: {:?}", e);
+            return Err(e);
+        }
+    };
 
-    // Main application loop
+    // Step 3: Open channel
+    app.set_loading_state(LoadingState::OpeningChannel(actor_id.to_string()));
+    terminal.draw(|f| ui::render(f, &mut app, &args))?;
+    
+    info!("Opening channel to actor...");
+    let mut chat_manager = match chat::ChatManager::open_channel(connection, actor_id, &args).await {
+        Ok(manager) => {
+            info!("Channel opened successfully");
+            manager
+        }
+        Err(e) => {
+            error!("Failed to open channel: {:?}", e);
+            return Err(e);
+        }
+    };
+
+    // Step 4: Initialize MCP (if configured)
+    if args.mcp_config.is_some() {
+        app.set_loading_state(LoadingState::InitializingMcp("Starting MCP servers".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        // MCP initialization is handled in the open_channel step
+    }
+
+    // Finish loading
+    app.finish_loading();
+    info!("Application ready");
+
+    // Start main application loop
     info!("Starting main application loop");
     let result = app.run(terminal, &mut chat_manager, &args).await;
 

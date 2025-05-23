@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use genai_types::{messages::Role, CompletionResponse, Message, MessageContent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -113,9 +114,9 @@ pub struct ChatManager {
 }
 
 impl ChatManager {
-    /// Create a new chat manager and initialize the connection
-    pub async fn new(args: &Args) -> Result<Self> {
-        info!("Creating new ChatManager");
+    /// Connect to Theater server
+    pub async fn connect_to_server(args: &Args) -> Result<TheaterConnection> {
+        info!("Connecting to Theater server");
         debug!("Args: {:?}", args);
 
         // Connect to Theater server
@@ -133,6 +134,69 @@ impl ChatManager {
             .context("Failed to connect to Theater server")?;
         info!("Successfully connected to Theater server");
 
+        Ok(connection)
+    }
+
+    /// Start the chat-state actor
+    pub async fn start_actor(
+        connection: &mut TheaterConnection,
+        _args: &Args,
+    ) -> Result<TheaterId> {
+        info!("Starting chat-state actor");
+        
+        // Start chat-state actor
+        info!(
+            "Starting chat-state actor with manifest: {}",
+            CHAT_STATE_ACTOR_MANIFEST
+        );
+        let start_actor_cmd = ManagementCommand::StartActor {
+            manifest: CHAT_STATE_ACTOR_MANIFEST.to_string(),
+            initial_state: None,
+            parent: false,
+            subscribe: false,
+        };
+        debug!("StartActor command: {:?}", start_actor_cmd);
+
+        info!("Sending StartActor command...");
+        connection
+            .send(start_actor_cmd)
+            .await
+            .context("Failed to send StartActor command")?;
+        info!("StartActor command sent successfully");
+
+        // Get the actor ID from the response
+        info!("Waiting for actor start response...");
+        let actor_id = loop {
+            debug!("Waiting for response from Theater server...");
+            let response = connection.receive().await?;
+            debug!("Received response: {:?}", response);
+
+            match response {
+                ManagementResponse::ActorStarted { id } => {
+                    info!("Actor started successfully with ID: {}", id);
+                    break id;
+                }
+                ManagementResponse::Error { error } => {
+                    error!("Failed to start actor: {:?}", error);
+                    return Err(anyhow::anyhow!("Failed to start actor: {:?}", error));
+                }
+                _ => {
+                    debug!("Received unexpected response, continuing to wait...");
+                }
+            }
+        };
+
+        Ok(actor_id)
+    }
+
+    /// Open channel and finalize ChatManager creation
+    pub async fn open_channel(
+        mut connection: TheaterConnection,
+        actor_id: TheaterId,
+        args: &Args,
+    ) -> Result<Self> {
+        info!("Opening channel and configuring actor");
+        
         // Load MCP configuration
         info!("Loading MCP configuration...");
         let mcp_config = if let Some(ref config_path) = args.mcp_config {
@@ -169,48 +233,6 @@ impl ChatManager {
             }
         };
 
-        // Start chat-state actor
-        info!(
-            "Starting chat-state actor with manifest: {}",
-            CHAT_STATE_ACTOR_MANIFEST
-        );
-        let start_actor_cmd = ManagementCommand::StartActor {
-            manifest: CHAT_STATE_ACTOR_MANIFEST.to_string(),
-            initial_state: None,
-            parent: false,
-            subscribe: false,
-        };
-        debug!("StartActor command: {:?}", start_actor_cmd);
-
-        info!("Sending StartActor command...");
-        connection
-            .send(start_actor_cmd)
-            .await
-            .context("Failed to send StartActor command")?;
-        info!("StartActor command sent successfully");
-
-        // Get the actor ID from the response
-        info!("Waiting for actor start response...");
-        let actor_id = loop {
-            debug!("Waiting for response from Theater server...");
-            let response = connection.receive().await?;
-            debug!("Received response: {:?}", response);
-
-            match response {
-                ManagementResponse::ActorStarted { id } => {
-                    info!("Actor started successfully with ID: {}", id);
-                    break id.to_string();
-                }
-                ManagementResponse::Error { error } => {
-                    error!("Failed to start actor: {:?}", error);
-                    return Err(anyhow::anyhow!("Failed to start actor: {:?}", error));
-                }
-                _ => {
-                    debug!("Received unexpected response, continuing to wait...");
-                }
-            }
-        };
-
         // Configure the actor with settings
         info!("Configuring actor with settings...");
         let settings = json!({
@@ -229,14 +251,10 @@ impl ChatManager {
         });
         debug!("Settings payload: {:?}", settings);
 
-        info!("Parsing actor ID: {}", actor_id);
-        let actor_id_parsed: TheaterId = actor_id.parse().context("Failed to parse actor ID")?;
-        debug!("Parsed actor ID: {:?}", actor_id_parsed);
-
         info!("Sending settings to actor...");
         connection
             .send(ManagementCommand::RequestActorMessage {
-                id: actor_id_parsed.clone(),
+                id: actor_id.clone(),
                 data: serde_json::to_vec(&settings).context("Failed to serialize settings")?,
             })
             .await
@@ -273,9 +291,17 @@ impl ChatManager {
         );
         Ok(ChatManager {
             connection,
-            actor_id,
+            actor_id: actor_id.to_string(),
             debug: args.debug,
         })
+    }
+
+    /// Create a new chat manager and initialize the connection (deprecated - use stepped approach)
+    pub async fn new(args: &Args) -> Result<Self> {
+        // Use the stepped approach internally
+        let mut connection = Self::connect_to_server(args).await?;
+        let actor_id = Self::start_actor(&mut connection, args).await?;
+        Self::open_channel(connection, actor_id, args).await
     }
 
     /// Get a specific message by ID from the chat-state actor

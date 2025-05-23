@@ -1,5 +1,27 @@
 use clap::Parser;
 
+/// Loading states during application startup
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoadingState {
+    ConnectingToServer(String),     // server address
+    StartingActor(String),          // actor manifest path
+    OpeningChannel(String),         // actor ID
+    InitializingMcp(String),        // MCP config status
+    Ready,
+}
+
+impl LoadingState {
+    pub fn message(&self) -> String {
+        match self {
+            LoadingState::ConnectingToServer(addr) => format!("Connecting to Theater server at: {}", addr),
+            LoadingState::StartingActor(manifest) => format!("Starting actor: {}", manifest.split('/').last().unwrap_or(manifest)),
+            LoadingState::OpeningChannel(actor_id) => format!("Opening channel to actor: {}", actor_id),
+            LoadingState::InitializingMcp(status) => format!("Initializing MCP servers: {}", status),
+            LoadingState::Ready => "Ready!".to_string(),
+        }
+    }
+}
+
 /// Command line arguments
 #[derive(Parser, Debug, Clone)]
 #[clap(author, version, about)]

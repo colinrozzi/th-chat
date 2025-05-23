@@ -17,7 +17,7 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
-use crate::config::Args;
+use crate::config::{Args, LoadingState};
 use crate::ui;
 
 /// Current input mode
@@ -64,6 +64,10 @@ pub struct App {
     pub messages_by_id: HashMap<String, ChatMessage>,
     /// Ordered list of message IDs representing the current conversation view
     pub message_chain: Vec<String>,
+    /// Loading state during startup
+    pub loading_state: Option<LoadingState>,
+    /// Whether we're in loading mode
+    pub is_loading: bool,
 }
 
 impl Default for App {
@@ -86,6 +90,8 @@ impl Default for App {
             client_head: None,
             messages_by_id: HashMap::new(),
             message_chain: Vec::new(),
+            loading_state: Some(LoadingState::ConnectingToServer("".to_string())),
+            is_loading: true,
         }
     }
 }
@@ -640,6 +646,18 @@ impl App {
             };
             self.last_thinking_update = Instant::now();
         }
+    }
+
+    /// Set the current loading state
+    pub fn set_loading_state(&mut self, state: LoadingState) {
+        self.loading_state = Some(state);
+        self.is_loading = true;
+    }
+
+    /// Mark loading as finished
+    pub fn finish_loading(&mut self) {
+        self.is_loading = false;
+        self.loading_state = None;
     }
 
     /// Set waiting for response state
