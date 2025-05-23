@@ -139,7 +139,7 @@ async fn run_app(
     if args.mcp_config.is_some() {
         app.set_loading_state(LoadingState::InitializingMcp("Starting MCP servers".to_string()));
         terminal.draw(|f| ui::render(f, &mut app, &args))?;
-        // MCP initialization is handled in the open_channel step
+        // MCP initialization is handled in open_channel step
     }
 
     // Finish loading

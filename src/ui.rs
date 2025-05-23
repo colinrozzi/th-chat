@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode};
-use crate::config::{Args, LoadingState};
+use crate::config::Args;
 
 /// Render the main user interface
 pub fn render(f: &mut Frame, app: &mut App, args: &Args) {

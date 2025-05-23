@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use anyhow::{Context, Result};
 use genai_types::{messages::Role, CompletionResponse, Message, MessageContent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
