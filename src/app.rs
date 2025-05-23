@@ -1,6 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
-use crossterm::event::{self, Event, EventStream, KeyCode, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
 use futures::stream::StreamExt;
 use futures::FutureExt;
 use genai_types::{messages::Role, Message, MessageContent};
@@ -17,7 +17,7 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
-use crate::config::{Args, LoadingState};
+use crate::config::{Args, LoadingState, LoadingStep, StepStatus};
 use crate::ui;
 
 /// Current input mode
@@ -68,6 +68,14 @@ pub struct App {
     pub loading_state: Option<LoadingState>,
     /// Whether we're in loading mode
     pub is_loading: bool,
+    /// Boot-style loading steps
+    pub loading_steps: Vec<LoadingStep>,
+    /// Current step being processed
+    pub current_step_index: usize,
+    /// Boot animation state (for the blinking cursor effect)
+    pub boot_cursor_visible: bool,
+    /// Last boot animation update
+    pub last_boot_update: Instant,
 }
 
 impl Default for App {
@@ -92,14 +100,50 @@ impl Default for App {
             message_chain: Vec::new(),
             loading_state: Some(LoadingState::ConnectingToServer("".to_string())),
             is_loading: true,
+            loading_steps: Vec::new(),
+            current_step_index: 0,
+            boot_cursor_visible: true,
+            last_boot_update: Instant::now(),
         }
     }
 }
 
 impl App {
     pub fn new(debug: bool) -> Self {
+        let loading_steps = vec![
+            LoadingStep {
+                message: "Initializing th-chat system".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Connecting to Theater runtime server".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Loading chat-state actor manifest".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Starting chat-state actor instance".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Opening communication channel".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Initializing MCP server connections".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Preparing chat interface".to_string(),
+                status: StepStatus::Pending,
+            },
+        ];
+
         App {
             debug,
+            loading_steps,
             ..Default::default()
         }
     }
@@ -134,10 +178,16 @@ impl App {
             .await
             .context("Failed to send initial message to Theater server")?;
 
+        self.connection_status = format!("Connected to {}", server_addr);
+
         let mut reader = EventStream::new();
 
         loop {
+            // Update animations
             self.update_thinking_animation();
+            if self.is_loading {
+                self.update_boot_animation();
+            }
 
             terminal.draw(|f| ui::render(f, self, args))?;
 
@@ -150,10 +200,10 @@ impl App {
                     info!("Received message from server: {:?}", msg);
 
                     match msg {
-                        Ok(ManagementResponse::ChannelMessage { channel_id, sender_id, message }) => {
+                        Ok(ManagementResponse::ChannelMessage { channel_id, sender_id: _, message }) => {
                             info!("Received message from channel {}: {:?}", channel_id, message);
                             if let Ok(payload) = serde_json::from_slice::<ChatStateResponse>(&message) {
-                                self.process_channel_message(payload);
+                                let _ = self.process_channel_message(payload);
                             } else {
                                 error!("Failed to parse message payload");
                             }
@@ -648,16 +698,127 @@ impl App {
         }
     }
 
-    /// Set the current loading state
+    /// Set the current loading state (legacy compatibility)
     pub fn set_loading_state(&mut self, state: LoadingState) {
-        self.loading_state = Some(state);
+        self.loading_state = Some(state.clone());
         self.is_loading = true;
+
+        // Map old loading states to new step system
+        match state {
+            LoadingState::ConnectingToServer(addr) => {
+                self.complete_step_if_current(0); // Complete "Initializing th-chat system"
+                self.start_loading_step(
+                    1,
+                    Some(format!("Connecting to Theater server at {}", addr)),
+                );
+            }
+            LoadingState::StartingActor(manifest) => {
+                self.complete_step_if_current(1); // Complete server connection
+                self.start_loading_step(
+                    2,
+                    Some(format!(
+                        "Loading actor manifest: {}",
+                        manifest.split('/').last().unwrap_or(&manifest)
+                    )),
+                );
+            }
+            LoadingState::OpeningChannel(actor_id) => {
+                self.complete_step_if_current(2); // Complete manifest loading
+                self.start_loading_step(3, None); // Start actor instance
+                self.complete_step_if_current(3); // Complete actor start
+                self.start_loading_step(
+                    4,
+                    Some(format!("Opening channel to actor {}", &actor_id[..8])),
+                );
+            }
+            LoadingState::InitializingMcp(_) => {
+                self.complete_step_if_current(4); // Complete channel opening
+                self.start_loading_step(5, None);
+            }
+            LoadingState::Ready => {
+                // Complete all remaining steps
+                for i in 0..self.loading_steps.len() {
+                    if !matches!(self.loading_steps[i].status, StepStatus::Success) {
+                        self.loading_steps[i].status = StepStatus::Success;
+                    }
+                }
+                self.current_step_index = self.loading_steps.len();
+            }
+        }
     }
 
     /// Mark loading as finished
     pub fn finish_loading(&mut self) {
+        // Complete any remaining steps
+        for step in &mut self.loading_steps {
+            if matches!(step.status, StepStatus::Pending | StepStatus::InProgress) {
+                step.status = StepStatus::Success;
+            }
+        }
         self.is_loading = false;
         self.loading_state = None;
+    }
+
+    /// Update the current loading step status
+    pub fn set_loading_step_status(&mut self, step_index: usize, status: StepStatus) {
+        if step_index < self.loading_steps.len() {
+            let should_advance = matches!(status, StepStatus::Success);
+            self.loading_steps[step_index].status = status;
+
+            // Update current step index to the next pending step
+            if should_advance {
+                self.current_step_index = step_index + 1;
+            }
+        }
+    }
+
+    /// Set current step to in-progress and update its message if needed
+    pub fn start_loading_step(&mut self, step_index: usize, custom_message: Option<String>) {
+        if step_index < self.loading_steps.len() {
+            if let Some(msg) = custom_message {
+                self.loading_steps[step_index].message = msg;
+            }
+            self.loading_steps[step_index].status = StepStatus::InProgress;
+            self.current_step_index = step_index;
+        }
+    }
+
+    /// Complete current step successfully
+    pub fn complete_current_step(&mut self) {
+        if self.current_step_index < self.loading_steps.len() {
+            self.loading_steps[self.current_step_index].status = StepStatus::Success;
+            self.current_step_index += 1;
+        }
+    }
+
+    /// Fail current step with error message
+    pub fn fail_current_step(&mut self, error: String) {
+        if self.current_step_index < self.loading_steps.len() {
+            self.loading_steps[self.current_step_index].status = StepStatus::Failed(error);
+        }
+    }
+
+    /// Update boot animation (blinking cursor effect)
+    pub fn update_boot_animation(&mut self) {
+        if self.last_boot_update.elapsed() > Duration::from_millis(500) {
+            self.boot_cursor_visible = !self.boot_cursor_visible;
+            self.last_boot_update = Instant::now();
+        }
+    }
+
+    /// Check if all loading steps are complete
+    pub fn is_loading_complete(&self) -> bool {
+        self.loading_steps
+            .iter()
+            .all(|step| matches!(step.status, StepStatus::Success))
+    }
+
+    /// Helper method for step completion during legacy loading state transitions
+    fn complete_step_if_current(&mut self, step_index: usize) {
+        if self.current_step_index == step_index && step_index < self.loading_steps.len() {
+            self.loading_steps[step_index].status = StepStatus::Success;
+            self.current_step_index += 1;
+        }
     }
 
     /// Set waiting for response state

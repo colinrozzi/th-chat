@@ -22,48 +22,117 @@ pub fn render(f: &mut Frame, app: &mut App, args: &Args) {
     }
 }
 
-/// Render the loading screen
+/// Render the Linux boot-style loading screen
 pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &Args) {
     let area = f.area();
     
-    // Create main layout
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),  // Title
-            Constraint::Min(5),     // Loading content
-            Constraint::Length(3),  // Footer
-        ])
-        .split(area);
-
-    // Title
-    let title = Paragraph::new("th-chat - Loading")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(title, chunks[0]);
-
-    // Loading content
-    if let Some(loading_state) = &app.loading_state {
-        let loading_text = vec![
-            Line::from(""),
-            Line::from(loading_state.message()),
-            Line::from(""),
-            Line::from("Please wait..."),
-        ];
+    // Clear the entire screen with black background
+    let background = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(background, area);
+    
+    // Create a simple layout - we want to start from the top-left like a real boot
+    let main_area = ratatui::layout::Rect {
+        x: 1,
+        y: 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    
+    // Boot header - show system info like real Linux boot
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("th-chat ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("v0.1.0", Style::default().fg(Color::White)),
+            Span::styled(" starting up...", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(""),
+    ];
+    
+    // Add each loading step with Linux-style formatting
+    for (i, step) in app.loading_steps.iter().enumerate() {
+        let is_current = i == app.current_step_index;
         
-        let loading_paragraph = Paragraph::new(loading_text)
-            .style(Style::default().fg(Color::White))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("Status"));
-        f.render_widget(loading_paragraph, chunks[1]);
+        // Create the line with proper spacing
+        let status_symbol = step.status.symbol();
+        let status_color = step.status.color();
+        
+        // For current step in progress, add blinking cursor effect
+        let message = if is_current && matches!(step.status, crate::config::StepStatus::InProgress) {
+            if app.boot_cursor_visible {
+                format!("{}...", step.message)
+            } else {
+                format!("{}   ", step.message)
+            }
+        } else {
+            step.message.clone()
+        };
+        
+        let line = Line::from(vec![
+            Span::styled(format!("{:<50}", message), Style::default().fg(Color::White)),
+            Span::styled(status_symbol, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        ]);
+        
+        lines.push(line);
+        
+        // Add error details if step failed
+        if let crate::config::StepStatus::Failed(error) = &step.status {
+            lines.push(Line::from(vec![
+                Span::styled("  Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(error, Style::default().fg(Color::Red)),
+            ]));
+            lines.push(Line::from(""));
+        }
     }
-
-    // Footer
-    let footer = Paragraph::new("Press Ctrl+C to cancel")
-        .style(Style::default().fg(Color::Gray))
-        .alignment(Alignment::Center);
-    f.render_widget(footer, chunks[2]);
+    
+    // Add some spacing
+    lines.push(Line::from(""));
+    
+    // Add system information like real Linux boot
+    if app.is_loading_complete() {
+        lines.push(Line::from(vec![
+            Span::styled("System ready. Starting chat interface", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            if app.boot_cursor_visible { 
+                Span::styled(".", Style::default().fg(Color::Green)) 
+            } else { 
+                Span::styled(" ", Style::default()) 
+            }
+        ]));
+    } else if app.current_step_index < app.loading_steps.len() {
+        // Show a kernel-style progress indicator
+        let progress = (app.current_step_index as f32 / app.loading_steps.len() as f32 * 100.0) as u8;
+        lines.push(Line::from(vec![
+            Span::styled(format!("Progress: {}%", progress), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+    
+    // Bottom status line - like Linux boot messages
+    let footer_y = area.height.saturating_sub(3);
+    let footer_area = ratatui::layout::Rect {
+        x: 1,
+        y: footer_y,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    
+    let footer_line = if app.loading_steps.iter().any(|s| matches!(s.status, crate::config::StepStatus::Failed(_))) {
+        Line::from(vec![
+            Span::styled("Boot failed. Press Ctrl+C to exit.", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Press Ctrl+C to abort startup", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    
+    // Render the main boot text
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(paragraph, main_area);
+    
+    // Render the footer
+    let footer_paragraph = Paragraph::new(vec![footer_line])
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(footer_paragraph, footer_area);
 }
 
 /// Render the main chat screen

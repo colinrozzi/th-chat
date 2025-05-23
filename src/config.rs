@@ -1,4 +1,40 @@
+use ratatui;
 use clap::Parser;
+
+/// Individual loading step with status
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadingStep {
+    pub message: String,
+    pub status: StepStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepStatus {
+    Pending,      // Not started yet
+    InProgress,   // Currently running
+    Success,      // Completed successfully  
+    Failed(String), // Failed with error message
+}
+
+impl StepStatus {
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            StepStatus::Pending => "    ",
+            StepStatus::InProgress => "[WAIT]",
+            StepStatus::Success => "[ OK ]",
+            StepStatus::Failed(_) => "[FAIL]",
+        }
+    }
+
+    pub fn color(&self) -> ratatui::style::Color {
+        match self {
+            StepStatus::Pending => ratatui::style::Color::DarkGray,
+            StepStatus::InProgress => ratatui::style::Color::Yellow,
+            StepStatus::Success => ratatui::style::Color::Green,
+            StepStatus::Failed(_) => ratatui::style::Color::Red,
+        }
+    }
+}
 
 /// Loading states during application startup
 #[derive(Debug, Clone, PartialEq)]
@@ -13,11 +49,11 @@ pub enum LoadingState {
 impl LoadingState {
     pub fn message(&self) -> String {
         match self {
-            LoadingState::ConnectingToServer(addr) => format!("Connecting to Theater server at: {}", addr),
-            LoadingState::StartingActor(manifest) => format!("Starting actor: {}", manifest.split('/').last().unwrap_or(manifest)),
-            LoadingState::OpeningChannel(actor_id) => format!("Opening channel to actor: {}", actor_id),
+            LoadingState::ConnectingToServer(addr) => format!("Connecting to Theater server at {}", addr),
+            LoadingState::StartingActor(manifest) => format!("Starting chat-state actor from {}", manifest.split('/').last().unwrap_or(manifest)),
+            LoadingState::OpeningChannel(actor_id) => format!("Opening communication channel to actor {}", &actor_id[..8]),
             LoadingState::InitializingMcp(status) => format!("Initializing MCP servers: {}", status),
-            LoadingState::Ready => "Ready!".to_string(),
+            LoadingState::Ready => "System ready".to_string(),
         }
     }
 }
