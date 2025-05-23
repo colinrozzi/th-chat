@@ -15,8 +15,9 @@ serde_json = "1.0"
 colored = "2.0"
 uuid = { version = "1.6", features = ["v4"] }
 ratatui = "0.28"
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "0.16"
+futures = "0.3"
 
 # Dependencies for message types
 genai-types = { path = "/Users/colinrozzi/work/genai-types" }

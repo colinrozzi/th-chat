@@ -1,13 +1,22 @@
+use anyhow::Context;
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, EventStream, KeyCode, KeyEventKind};
+use futures::stream::StreamExt;
+use futures::FutureExt;
 use genai_types::{messages::Role, Message, MessageContent};
 use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use tracing::{info, debug, error};
+use theater::client::TheaterConnection;
+use theater::messages::ChannelParticipant;
+use theater::theater_server::ManagementCommand;
+use theater::theater_server::ManagementResponse;
+use theater::TheaterId;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::chat::{ChatManager, ChatMessage};
+use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
 use crate::config::Args;
 use crate::ui;
 
@@ -96,66 +105,115 @@ impl App {
         chat_manager: &mut ChatManager,
         args: &Args,
     ) -> Result<()> {
-        // Initial sync to load any existing conversation
-        info!("Performing initial sync with chat-state actor");
-        self.sync_with_chat_state(chat_manager).await
-            .unwrap_or_else(|e| {
-                error!("Failed initial sync: {:?}", e);
-            });
-        
-        // Main event loop
+        let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
+
+        let mut connection = TheaterConnection::new(server_addr);
+        info!("Attempting to connect to Theater server...");
+        connection
+            .connect()
+            .await
+            .context("Failed to connect to Theater server")?;
+
+        // send the initial messages to the server to listen for head and message updates
+        let message = ManagementCommand::OpenChannel {
+            actor_id: ChannelParticipant::Actor(
+                TheaterId::parse(&chat_manager.actor_id).expect("Invalid actor ID"),
+            ),
+            initial_message: vec![],
+        };
+
+        info!("Sending initial message to server: {:?}", message);
+        connection
+            .send(message)
+            .await
+            .context("Failed to send initial message to Theater server")?;
+
+        let mut reader = EventStream::new();
+
         loop {
             self.update_thinking_animation();
-            
+
             terminal.draw(|f| ui::render(f, self, args))?;
 
             if self.should_quit {
                 break;
             }
+            let input_event = reader.next().fuse();
+            tokio::select! {
+                msg = connection.receive().fuse() => {
+                    info!("Received message from server: {:?}", msg);
 
-            // Handle events with timeout for animation updates
-            if event::poll(Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key_event) => {
-                        if let Some(message) = self.handle_key_event(key_event)? {
-                            // Handle special commands
-                            if message.starts_with('/') {
-                                self.handle_command(&message[1..]);
+                    match msg {
+                        Ok(ManagementResponse::ChannelMessage { channel_id, sender_id, message }) => {
+                            info!("Received message from channel {}: {:?}", channel_id, message);
+                            if let Ok(payload) = serde_json::from_slice::<ChatStateResponse>(&message) {
+                                self.process_channel_message(payload);
                             } else {
-                                // Send message and sync
-                                self.waiting_for_response = true;
-                                
-                                match chat_manager.send_message_get_head(message).await {
-                                    Ok(_new_head) => {
-                                        // Sync to get the new messages
-                                        if let Err(e) = self.sync_with_chat_state(chat_manager).await {
-                                            error!("Failed to sync after sending message: {:?}", e);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to send message: {:?}", e);
-                                        let error_message = ChatMessage::from_message(
-                                            Some(format!("error-{}", Uuid::new_v4())),
-                                            None,
-                                            Message {
-                                                role: Role::System,
-                                                content: vec![MessageContent::Text {
-                                                    text: format!("Error: {}", e),
-                                                }],
-                                            },
-                                        );
-                                        self.add_message_to_chain(error_message);
-                                    }
-                                }
-                                
-                                self.waiting_for_response = false;
+                                error!("Failed to parse message payload");
                             }
                         }
+                        Ok(ManagementResponse::ChannelClosed { .. }) => {
+                            info!("Channel closed by server");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Error receiving message: {:?}", e);
+                        }
+                        _ => {
+                            error!("Unexpected message type");
+                        }
                     }
-                    Event::Resize(_, _) => {
-                        // Handle terminal resize
+                }
+
+                event = input_event => {
+                    match event {
+                        Some(Ok(event)) => {
+                            if let Event::Key(key_event) = event {
+                                if let Some(message) = self.handle_key_event(key_event)? {
+                                    // Handle special commands
+                                    if message.starts_with('/') {
+                                        self.handle_command(&message[1..]);
+                                    } else {
+                                        // Send message and sync
+                                        self.waiting_for_response = true;
+
+                                        match chat_manager.send_message_get_head(message).await {
+                                            Ok(_new_head) => {
+                                                // Sync to get the new messages
+                                                if let Err(e) = self.sync_with_chat_state(chat_manager).await {
+                                                    error!("Failed to sync after sending message: {:?}", e);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to send message: {:?}", e);
+                                                let error_message = ChatMessage::from_message(
+                                                    Some(format!("error-{}", Uuid::new_v4())),
+                                                    None,
+                                                    Message {
+                                                        role: Role::System,
+                                                        content: vec![MessageContent::Text {
+                                                            text: format!("Error: {}", e),
+                                                        }],
+                                                    },
+                                                );
+                                                self.add_message_to_chain(error_message);
+                                            }
+                                        }
+
+                                        self.waiting_for_response = false;
+                                    }
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            error!("Error reading event: {:?}", e);
+                        }
+                        None => {
+                            // Stream closed
+                            error!("Event stream closed");
+                            break;
+                        }
                     }
-                    _ => {}
                 }
             }
         }
@@ -232,8 +290,6 @@ impl App {
         Ok(None)
     }
 
-
-
     /// Handle special commands
     fn handle_command(&mut self, command: &str) {
         match command {
@@ -256,13 +312,19 @@ impl App {
             }
             "/debug" => {
                 self.debug = !self.debug;
-                let status_msg = if self.debug { "Debug mode enabled" } else { "Debug mode disabled" };
+                let status_msg = if self.debug {
+                    "Debug mode enabled"
+                } else {
+                    "Debug mode disabled"
+                };
                 let system_message = ChatMessage::from_message(
                     None,
                     None,
                     Message {
                         role: Role::System,
-                        content: vec![MessageContent::Text { text: status_msg.to_string() }],
+                        content: vec![MessageContent::Text {
+                            text: status_msg.to_string(),
+                        }],
                     },
                 );
                 self.add_message(system_message);
@@ -292,14 +354,18 @@ impl App {
                     Message {
                         role: Role::System,
                         content: vec![MessageContent::Text {
-                            text: "Manual sync requested (will sync on next opportunity)".to_string(),
+                            text: "Manual sync requested (will sync on next opportunity)"
+                                .to_string(),
                         }],
                     },
                 );
                 self.add_message_to_chain(sync_message);
             }
             _ => {
-                let error_msg = format!("Unknown command: {}. Type /help for available commands.", command);
+                let error_msg = format!(
+                    "Unknown command: {}. Type /help for available commands.",
+                    command
+                );
                 let system_message = ChatMessage::from_message(
                     None,
                     None,
@@ -311,6 +377,25 @@ impl App {
                 self.add_message(system_message);
             }
         }
+    }
+
+    fn process_channel_message(&mut self, payload: ChatStateResponse) -> Result<()> {
+        match payload {
+            ChatStateResponse::ChatMessage { message } => {
+                self.add_message_to_chain(message);
+            }
+            ChatStateResponse::Head { head } => {
+                self.client_head = head;
+            }
+            ChatStateResponse::Error { error } => {
+                error!("Error from server: {:?}", error);
+            }
+            _ => {
+                error!("Unknown message type from server");
+            }
+        }
+
+        Ok(())
     }
 
     /// Move cursor left in input
@@ -378,75 +463,85 @@ impl App {
     /// Sync with the chat-state actor by fetching new messages from our head to the server's head
     pub async fn sync_with_chat_state(&mut self, chat_manager: &mut ChatManager) -> Result<()> {
         info!("Syncing with chat-state actor");
-        
+
         // Get the current head from the chat-state actor
         let server_head = chat_manager.get_current_head().await?;
-        
+
         // If server head is None, there's no conversation yet
         let Some(server_head) = server_head else {
             info!("No conversation exists on server yet");
             return Ok(());
         };
-        
+
         // If our client head matches the server head, we're already in sync
         if self.client_head.as_ref() == Some(&server_head) {
             debug!("Already in sync with server head: {}", server_head);
             return Ok(());
         }
-        
-        info!("Server head: {}, Client head: {:?}", server_head, self.client_head);
-        
+
+        info!(
+            "Server head: {}, Client head: {:?}",
+            server_head, self.client_head
+        );
+
         // Fetch new messages from server head back to our client head
-        let new_messages = chat_manager.get_messages_since_head(&server_head, &self.client_head).await?;
-        
+        let new_messages = chat_manager
+            .get_messages_since_head(&server_head, &self.client_head)
+            .await?;
+
         info!("Fetched {} new messages", new_messages.len());
-        
+
         // Add new messages to our state
         for message in new_messages {
             self.add_message_to_chain(message);
         }
-        
+
         // Update our client head
         self.client_head = Some(server_head);
-        
-        info!("Sync complete. New client head: {}", self.client_head.as_ref().unwrap());
+
+        info!(
+            "Sync complete. New client head: {}",
+            self.client_head.as_ref().unwrap()
+        );
         Ok(())
     }
-    
+
     /// Add a message to the chain, maintaining the linked structure
     fn add_message_to_chain(&mut self, message: ChatMessage) {
         let message_id = message.id.as_ref().unwrap().clone();
-        
+
         // Store the message
-        self.messages_by_id.insert(message_id.clone(), message.clone());
-        
+        self.messages_by_id
+            .insert(message_id.clone(), message.clone());
+
         // Add to chain if not already present
         if !self.message_chain.contains(&message_id) {
             self.message_chain.push(message_id);
         }
-        
+
         // Rebuild the messages vector for UI compatibility
         self.rebuild_messages_vector();
-        
+
         self.update_scroll();
         self.auto_scroll_to_bottom();
     }
-    
+
     /// Rebuild the messages vector from the chain for UI rendering
     fn rebuild_messages_vector(&mut self) {
-        self.messages = self.message_chain
+        self.messages = self
+            .message_chain
             .iter()
             .filter_map(|id| self.messages_by_id.get(id))
             .cloned()
             .collect();
     }
-    
+
     /// Auto-scroll to bottom after adding messages (keep at bottom by default)
     fn auto_scroll_to_bottom(&mut self) {
         // vertical_scroll = 0 now correctly means show most recent messages (bottom)
         self.vertical_scroll = 0;
     }
-    
+
     /// Clear the conversation (reset chain state)
     pub fn clear_conversation(&mut self) {
         self.messages.clear();
@@ -477,7 +572,7 @@ impl App {
         // Calculate total lines (this should match the UI calculation)
         let total_lines = self.calculate_total_display_lines();
         let available_height = 20; // This is an estimate, should be passed from UI but this works
-        
+
         if total_lines > available_height {
             let max_scroll = total_lines.saturating_sub(available_height);
             if self.vertical_scroll < max_scroll {
@@ -495,12 +590,12 @@ impl App {
     fn calculate_total_display_lines(&self) -> usize {
         let mut total_lines = 0;
         let available_width = 70; // Estimate, should be passed from UI but this works for now
-        
+
         for chat_msg in &self.messages {
             let message = chat_msg.as_message();
             // Role header
             total_lines += 1;
-            
+
             // Content lines
             for content in &message.content {
                 match content {
@@ -519,7 +614,8 @@ impl App {
                                 Err(_) => format!("{}", input),
                             }
                         };
-                        let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
+                        let wrapped_input =
+                            textwrap::fill(&input_str, available_width.saturating_sub(6));
                         total_lines += wrapped_input.lines().count();
                     }
                     MessageContent::ToolResult { content, .. } => {
@@ -529,7 +625,8 @@ impl App {
                             match tool_content {
                                 mcp_protocol::tool::ToolContent::Text { text } => {
                                     total_lines += 1; // Output label
-                                    let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
+                                    let wrapped_output =
+                                        textwrap::fill(text, available_width.saturating_sub(6));
                                     total_lines += wrapped_output.lines().count();
                                 }
                                 _ => {
@@ -540,22 +637,24 @@ impl App {
                     }
                 }
             }
-            
+
             // Add line for completion token usage if present
             if chat_msg.is_completion() {
                 total_lines += 1;
             }
-            
+
             // Spacing between messages
             total_lines += 1;
         }
-        
+
         total_lines
     }
 
     /// Update thinking animation
     pub fn update_thinking_animation(&mut self) {
-        if self.waiting_for_response && self.last_thinking_update.elapsed() > Duration::from_millis(500) {
+        if self.waiting_for_response
+            && self.last_thinking_update.elapsed() > Duration::from_millis(500)
+        {
             self.thinking_dots = match self.thinking_dots.as_str() {
                 "." => "..".to_string(),
                 ".." => "...".to_string(),

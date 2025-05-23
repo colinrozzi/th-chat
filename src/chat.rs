@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use genai_types::{messages::Role, Message, MessageContent, CompletionResponse};
+use genai_types::{messages::Role, CompletionResponse, Message, MessageContent};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use theater::client::TheaterConnection;
 use theater::id::TheaterId;
 use theater::theater_server::{ManagementCommand, ManagementResponse};
 use tokio::sync::Mutex;
-use tracing::{info, error, debug, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{Args, CHAT_STATE_ACTOR_MANIFEST};
 
@@ -37,12 +37,12 @@ impl ChatMessage {
             ChatEntry::Completion(completion) => completion.clone().into(),
         }
     }
-    
+
     /// Check if this is a completion response
     pub fn is_completion(&self) -> bool {
         matches!(self.entry, ChatEntry::Completion(_))
     }
-    
+
     /// Get completion response if this is a completion
     pub fn as_completion(&self) -> Option<&CompletionResponse> {
         match &self.entry {
@@ -50,7 +50,7 @@ impl ChatMessage {
             _ => None,
         }
     }
-    
+
     /// Get the role of the message
     pub fn role(&self) -> Role {
         match &self.entry {
@@ -58,7 +58,7 @@ impl ChatMessage {
             ChatEntry::Completion(completion) => completion.role.clone(),
         }
     }
-    
+
     /// Create a new ChatMessage from a Message (convenience constructor)
     pub fn from_message(id: Option<String>, parent_id: Option<String>, message: Message) -> Self {
         Self {
@@ -67,9 +67,13 @@ impl ChatMessage {
             entry: ChatEntry::Message(message),
         }
     }
-    
+
     /// Create a new ChatMessage from a CompletionResponse (convenience constructor)
-    pub fn from_completion(id: Option<String>, parent_id: Option<String>, completion: CompletionResponse) -> Self {
+    pub fn from_completion(
+        id: Option<String>,
+        parent_id: Option<String>,
+        completion: CompletionResponse,
+    ) -> Self {
         Self {
             id,
             parent_id,
@@ -81,7 +85,7 @@ impl ChatMessage {
 /// Response types from the chat-state actor
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
-enum ChatStateResponse {
+pub enum ChatStateResponse {
     #[serde(rename = "head")]
     Head { head: Option<String> },
     #[serde(rename = "history")]
@@ -95,7 +99,7 @@ enum ChatStateResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ErrorInfo {
+pub struct ErrorInfo {
     code: String,
     message: String,
     details: Option<HashMap<String, String>>,
@@ -104,7 +108,7 @@ struct ErrorInfo {
 /// Manages the chat connection and state
 pub struct ChatManager {
     connection: Arc<Mutex<TheaterConnection>>,
-    actor_id: String,
+    pub actor_id: String,
     debug: bool,
 }
 
@@ -113,17 +117,19 @@ impl ChatManager {
     pub async fn new(args: &Args) -> Result<Self> {
         info!("Creating new ChatManager");
         debug!("Args: {:?}", args);
-        
+
         // Connect to Theater server
         info!("Parsing server address: {}", args.server);
         let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
         debug!("Parsed server address: {:?}", server_addr);
-        
+
         info!("Creating Theater connection to {}", server_addr);
         let mut connection = TheaterConnection::new(server_addr);
-        
+
         info!("Attempting to connect to Theater server...");
-        connection.connect().await
+        connection
+            .connect()
+            .await
             .context("Failed to connect to Theater server")?;
         info!("Successfully connected to Theater server");
 
@@ -136,9 +142,12 @@ impl ChatManager {
                     info!("Successfully loaded custom MCP config");
                     debug!("MCP config: {:?}", config);
                     Some(config)
-                },
+                }
                 Err(e) => {
-                    warn!("Failed to load custom MCP config: {:?}, continuing without MCP", e);
+                    warn!(
+                        "Failed to load custom MCP config: {:?}, continuing without MCP",
+                        e
+                    );
                     None
                 }
             }
@@ -149,16 +158,22 @@ impl ChatManager {
                     info!("Successfully loaded default MCP config");
                     debug!("MCP config: {:?}", config);
                     Some(config)
-                },
+                }
                 Err(e) => {
-                    warn!("Failed to load default MCP config: {:?}, continuing without MCP", e);
+                    warn!(
+                        "Failed to load default MCP config: {:?}, continuing without MCP",
+                        e
+                    );
                     None
                 }
             }
         };
 
         // Start chat-state actor
-        info!("Starting chat-state actor with manifest: {}", CHAT_STATE_ACTOR_MANIFEST);
+        info!(
+            "Starting chat-state actor with manifest: {}",
+            CHAT_STATE_ACTOR_MANIFEST
+        );
         let start_actor_cmd = ManagementCommand::StartActor {
             manifest: CHAT_STATE_ACTOR_MANIFEST.to_string(),
             initial_state: None,
@@ -168,7 +183,9 @@ impl ChatManager {
         debug!("StartActor command: {:?}", start_actor_cmd);
 
         info!("Sending StartActor command...");
-        connection.send(start_actor_cmd).await
+        connection
+            .send(start_actor_cmd)
+            .await
             .context("Failed to send StartActor command")?;
         info!("StartActor command sent successfully");
 
@@ -217,10 +234,13 @@ impl ChatManager {
         debug!("Parsed actor ID: {:?}", actor_id_parsed);
 
         info!("Sending settings to actor...");
-        connection.send(ManagementCommand::RequestActorMessage {
-            id: actor_id_parsed.clone(),
-            data: serde_json::to_vec(&settings).context("Failed to serialize settings")?,
-        }).await.context("Failed to send settings to actor")?;
+        connection
+            .send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed.clone(),
+                data: serde_json::to_vec(&settings).context("Failed to serialize settings")?,
+            })
+            .await
+            .context("Failed to send settings to actor")?;
         info!("Settings sent successfully");
 
         // Wait for settings confirmation
@@ -247,7 +267,10 @@ impl ChatManager {
 
         let connection = Arc::new(Mutex::new(connection));
 
-        info!("ChatManager created successfully with actor ID: {}", actor_id);
+        info!(
+            "ChatManager created successfully with actor ID: {}",
+            actor_id
+        );
         Ok(ChatManager {
             connection,
             actor_id,
@@ -255,11 +278,10 @@ impl ChatManager {
         })
     }
 
-
-
     /// Get a specific message by ID from the chat-state actor
     async fn get_message_by_id(&self, message_id: &str) -> Result<Option<ChatMessage>> {
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
 
         let message_request = json!({
             "type": "get_message",
@@ -324,13 +346,14 @@ impl ChatManager {
     /// Get the current head from the chat-state actor
     pub async fn get_current_head(&mut self) -> Result<Option<String>> {
         info!("Getting current head from chat-state actor");
-        
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
-        
+
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
         let get_head_request = json!({
             "type": "get_head"
         });
-        
+
         {
             let mut conn = self.connection.lock().await;
             conn.send(ManagementCommand::RequestActorMessage {
@@ -341,19 +364,19 @@ impl ChatManager {
             .await
             .context("Failed to send get_head request")?;
         }
-        
+
         // Wait for response
         loop {
             let resp = {
                 let mut conn = self.connection.lock().await;
                 conn.receive().await?
             };
-            
+
             match resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
                     let response: ChatStateResponse = serde_json::from_slice(&message)
                         .context("Failed to parse head response")?;
-                    
+
                     match response {
                         ChatStateResponse::Head { head } => {
                             debug!("Received head: {:?}", head);
@@ -364,7 +387,10 @@ impl ChatManager {
                             return Ok(None);
                         }
                         _ => {
-                            return Err(anyhow::anyhow!("Unexpected response for get_head: {:?}", response));
+                            return Err(anyhow::anyhow!(
+                                "Unexpected response for get_head: {:?}",
+                                response
+                            ));
                         }
                     }
                 }
@@ -377,14 +403,21 @@ impl ChatManager {
             }
         }
     }
-    
+
     /// Get messages from server_head back to client_head (following the chain backward)
-    pub async fn get_messages_since_head(&self, server_head: &str, client_head: &Option<String>) -> Result<Vec<ChatMessage>> {
-        info!("Getting messages from {} back to {:?}", server_head, client_head);
-        
+    pub async fn get_messages_since_head(
+        &self,
+        server_head: &str,
+        client_head: &Option<String>,
+    ) -> Result<Vec<ChatMessage>> {
+        info!(
+            "Getting messages from {} back to {:?}",
+            server_head, client_head
+        );
+
         let mut messages = Vec::new();
         let mut current_id = Some(server_head.to_string());
-        
+
         // Traverse backwards from server head until we reach our client head (or the beginning)
         while let Some(id) = current_id {
             // Stop if we've reached our client's known head
@@ -392,7 +425,7 @@ impl ChatManager {
                 debug!("Reached client head: {}", id);
                 break;
             }
-            
+
             // Get the message
             match self.get_message_by_id(&id).await? {
                 Some(chat_message) => {
@@ -406,29 +439,33 @@ impl ChatManager {
                 }
             }
         }
-        
+
         // Reverse to get chronological order (oldest to newest)
         messages.reverse();
-        info!("Retrieved {} messages in chronological order", messages.len());
+        info!(
+            "Retrieved {} messages in chronological order",
+            messages.len()
+        );
         Ok(messages)
     }
-    
+
     /// Send a message and return the new head (don't fetch messages here)
     pub async fn send_message_get_head(&mut self, message: String) -> Result<String> {
         info!("Sending message and getting new head");
-        
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID")?;
-        
+
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
         let message_obj = Message {
             role: Role::User,
             content: vec![MessageContent::Text { text: message }],
         };
-        
+
         let add_message_request = json!({
             "type": "add_message",
             "message": message_obj
         });
-        
+
         // Send the message
         {
             let mut conn = self.connection.lock().await;
@@ -440,14 +477,14 @@ impl ChatManager {
             .await
             .context("Failed to send message to actor")?;
         }
-        
+
         // Wait for acknowledgment
         loop {
             let resp = {
                 let mut conn = self.connection.lock().await;
                 conn.receive().await?
             };
-            
+
             match resp {
                 ManagementResponse::RequestedMessage { .. } => break,
                 ManagementResponse::Error { error } => {
@@ -456,12 +493,12 @@ impl ChatManager {
                 _ => continue,
             }
         }
-        
+
         // Generate completion
         let generate_request = json!({
             "type": "generate_completion"
         });
-        
+
         {
             let mut conn = self.connection.lock().await;
             conn.send(ManagementCommand::RequestActorMessage {
@@ -472,26 +509,31 @@ impl ChatManager {
             .await
             .context("Failed to send generate request")?;
         }
-        
+
         // Wait for completion and get new head
         loop {
             let resp = {
                 let mut conn = self.connection.lock().await;
                 conn.receive().await?
             };
-            
+
             match resp {
                 ManagementResponse::RequestedMessage { message, .. } => {
                     let response: ChatStateResponse = serde_json::from_slice(&message)
                         .context("Failed to parse completion response")?;
-                    
+
                     match response {
-                        ChatStateResponse::Head { head: Some(new_head) } => {
+                        ChatStateResponse::Head {
+                            head: Some(new_head),
+                        } => {
                             info!("Received new head after completion: {}", new_head);
                             return Ok(new_head);
                         }
                         ChatStateResponse::Error { error } => {
-                            return Err(anyhow::anyhow!("Error generating completion: {:?}", error));
+                            return Err(anyhow::anyhow!(
+                                "Error generating completion: {:?}",
+                                error
+                            ));
                         }
                         _ => continue,
                     }
@@ -506,7 +548,10 @@ impl ChatManager {
 
     /// Cleanup resources
     pub async fn cleanup(&self) -> Result<()> {
-        let actor_id_parsed: TheaterId = self.actor_id.parse().context("Failed to parse actor ID for cleanup")?;
+        let actor_id_parsed: TheaterId = self
+            .actor_id
+            .parse()
+            .context("Failed to parse actor ID for cleanup")?;
 
         let mut connection = self.connection.lock().await;
 
