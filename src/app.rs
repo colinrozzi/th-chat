@@ -134,16 +134,16 @@ impl App {
                                     }
                                     Err(e) => {
                                         error!("Failed to send message: {:?}", e);
-                                        let error_message = ChatMessage {
-                                            id: Some(format!("error-{}", Uuid::new_v4())),
-                                            parent_id: None,
-                                            message: Message {
+                                        let error_message = ChatMessage::from_message(
+                                            Some(format!("error-{}", Uuid::new_v4())),
+                                            None,
+                                            Message {
                                                 role: Role::System,
                                                 content: vec![MessageContent::Text {
                                                     text: format!("Error: {}", e),
                                                 }],
                                             },
-                                        };
+                                        );
                                         self.add_message_to_chain(error_message);
                                     }
                                 }
@@ -242,29 +242,29 @@ impl App {
             }
             "/clear" => {
                 self.clear_conversation();
-                let clear_message = ChatMessage {
-                    id: Some(format!("system-{}", Uuid::new_v4())),
-                    parent_id: None,
-                    message: Message {
+                let clear_message = ChatMessage::from_message(
+                    Some(format!("system-{}", Uuid::new_v4())),
+                    None,
+                    Message {
                         role: Role::System,
                         content: vec![MessageContent::Text {
                             text: "Conversation cleared".to_string(),
                         }],
                     },
-                };
+                );
                 self.add_message_to_chain(clear_message);
             }
             "/debug" => {
                 self.debug = !self.debug;
                 let status_msg = if self.debug { "Debug mode enabled" } else { "Debug mode disabled" };
-                let system_message = ChatMessage {
-                    id: None,
-                    parent_id: None,
-                    message: Message {
+                let system_message = ChatMessage::from_message(
+                    None,
+                    None,
+                    Message {
                         role: Role::System,
                         content: vec![MessageContent::Text { text: status_msg.to_string() }],
                     },
-                };
+                );
                 self.add_message(system_message);
             }
             "/status" => {
@@ -274,40 +274,40 @@ impl App {
                     self.messages.len(),
                     self.message_chain.len()
                 );
-                let status_message = ChatMessage {
-                    id: Some(format!("system-{}", Uuid::new_v4())),
-                    parent_id: None,
-                    message: Message {
+                let status_message = ChatMessage::from_message(
+                    Some(format!("system-{}", Uuid::new_v4())),
+                    None,
+                    Message {
                         role: Role::System,
                         content: vec![MessageContent::Text { text: status_text }],
                     },
-                };
+                );
                 self.add_message_to_chain(status_message);
             }
             "/sync" => {
                 // Add a manual sync command for debugging
-                let sync_message = ChatMessage {
-                    id: Some(format!("system-{}", Uuid::new_v4())),
-                    parent_id: None,
-                    message: Message {
+                let sync_message = ChatMessage::from_message(
+                    Some(format!("system-{}", Uuid::new_v4())),
+                    None,
+                    Message {
                         role: Role::System,
                         content: vec![MessageContent::Text {
                             text: "Manual sync requested (will sync on next opportunity)".to_string(),
                         }],
                     },
-                };
+                );
                 self.add_message_to_chain(sync_message);
             }
             _ => {
                 let error_msg = format!("Unknown command: {}. Type /help for available commands.", command);
-                let system_message = ChatMessage {
-                    id: None,
-                    parent_id: None,
-                    message: Message {
+                let system_message = ChatMessage::from_message(
+                    None,
+                    None,
+                    Message {
                         role: Role::System,
                         content: vec![MessageContent::Text { text: error_msg }],
                     },
-                };
+                );
                 self.add_message(system_message);
             }
         }
@@ -497,11 +497,12 @@ impl App {
         let available_width = 70; // Estimate, should be passed from UI but this works for now
         
         for chat_msg in &self.messages {
+            let message = chat_msg.as_message();
             // Role header
             total_lines += 1;
             
             // Content lines
-            for content in &chat_msg.message.content {
+            for content in &message.content {
                 match content {
                     MessageContent::Text { text } => {
                         let wrapped_text = textwrap::fill(text, available_width);
@@ -538,6 +539,11 @@ impl App {
                         }
                     }
                 }
+            }
+            
+            // Add line for completion token usage if present
+            if chat_msg.is_completion() {
+                total_lines += 1;
             }
             
             // Spacing between messages

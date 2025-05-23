@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode};
+
 use crate::config::Args;
 
 /// Render the main user interface
@@ -192,21 +193,41 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     let mut all_items = Vec::new();
     
     for chat_msg in &app.messages {
-        let (prefix, role_style) = match chat_msg.message.role {
+        let message = chat_msg.as_message();
+        let (prefix, role_style) = match message.role {
             Role::User => ("👤 You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Role::Assistant => ("🤖 Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
             Role::System => ("⚙️ System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         };
         
-        // Add role header
-        all_items.push(ListItem::new(Line::from(Span::styled(prefix, role_style))));
+        // Add role header with completion info if available
+        let header_text = if let Some(completion) = chat_msg.as_completion() {
+            format!("{} [{}]", prefix, completion.model)
+        } else {
+            prefix.to_string()
+        };
+        all_items.push(ListItem::new(Line::from(Span::styled(header_text, role_style))));
         
         // Process each content item in the message
-        for content in &chat_msg.message.content {
+        for content in &message.content {
             let content_lines = format_message_content(content, available_width);
             for line in content_lines {
                 all_items.push(ListItem::new(line));
             }
+        }
+        
+        // Add token usage info for completions
+        if let Some(completion) = chat_msg.as_completion() {
+            let usage_text = format!(
+                "📊 Tokens: {} in, {} out | Stop: {:?}",
+                completion.usage.input_tokens,
+                completion.usage.output_tokens,
+                completion.stop_reason
+            );
+            all_items.push(ListItem::new(Line::from(Span::styled(
+                usage_text,
+                Style::default().fg(Color::DarkGray)
+            ))));
         }
         
         // Add spacing between messages

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use genai_types::{messages::Role, Message, MessageContent};
+use genai_types::{messages::Role, Message, MessageContent, CompletionResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -18,7 +18,64 @@ use crate::config::{Args, CHAT_STATE_ACTOR_MANIFEST};
 pub struct ChatMessage {
     pub id: Option<String>,
     pub parent_id: Option<String>,
-    pub message: Message,
+    pub entry: ChatEntry,
+}
+
+/// Chat entry that can be either a message or completion response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChatEntry {
+    Message(Message),
+    Completion(CompletionResponse),
+}
+
+/// Helper methods for ChatMessage
+impl ChatMessage {
+    /// Get the message content as a Message (for backward compatibility)
+    pub fn as_message(&self) -> Message {
+        match &self.entry {
+            ChatEntry::Message(msg) => msg.clone(),
+            ChatEntry::Completion(completion) => completion.clone().into(),
+        }
+    }
+    
+    /// Check if this is a completion response
+    pub fn is_completion(&self) -> bool {
+        matches!(self.entry, ChatEntry::Completion(_))
+    }
+    
+    /// Get completion response if this is a completion
+    pub fn as_completion(&self) -> Option<&CompletionResponse> {
+        match &self.entry {
+            ChatEntry::Completion(completion) => Some(completion),
+            _ => None,
+        }
+    }
+    
+    /// Get the role of the message
+    pub fn role(&self) -> Role {
+        match &self.entry {
+            ChatEntry::Message(msg) => msg.role.clone(),
+            ChatEntry::Completion(completion) => completion.role.clone(),
+        }
+    }
+    
+    /// Create a new ChatMessage from a Message (convenience constructor)
+    pub fn from_message(id: Option<String>, parent_id: Option<String>, message: Message) -> Self {
+        Self {
+            id,
+            parent_id,
+            entry: ChatEntry::Message(message),
+        }
+    }
+    
+    /// Create a new ChatMessage from a CompletionResponse (convenience constructor)
+    pub fn from_completion(id: Option<String>, parent_id: Option<String>, completion: CompletionResponse) -> Self {
+        Self {
+            id,
+            parent_id,
+            entry: ChatEntry::Completion(completion),
+        }
+    }
 }
 
 /// Response types from the chat-state actor
