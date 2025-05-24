@@ -1,5 +1,5 @@
-use ratatui;
 use clap::Parser;
+use ratatui;
 
 /// Individual loading step with status
 #[derive(Debug, Clone, PartialEq)]
@@ -10,9 +10,9 @@ pub struct LoadingStep {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepStatus {
-    Pending,      // Not started yet
-    InProgress,   // Currently running
-    Success,      // Completed successfully  
+    Pending,        // Not started yet
+    InProgress,     // Currently running
+    Success,        // Completed successfully
     Failed(String), // Failed with error message
 }
 
@@ -39,20 +39,29 @@ impl StepStatus {
 /// Loading states during application startup
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadingState {
-    ConnectingToServer(String),     // server address
-    StartingActor(String),          // actor manifest path
-    OpeningChannel(String),         // actor ID
-    InitializingMcp(String),        // MCP config status
+    ConnectingToServer(String), // server address
+    StartingActor(String),      // actor manifest path
+    OpeningChannel(String),     // actor ID
+    InitializingMcp(String),    // MCP config status
     Ready,
 }
 
 impl LoadingState {
     pub fn message(&self) -> String {
         match self {
-            LoadingState::ConnectingToServer(addr) => format!("Connecting to Theater server at {}", addr),
-            LoadingState::StartingActor(manifest) => format!("Starting chat-state actor from {}", manifest.split('/').last().unwrap_or(manifest)),
-            LoadingState::OpeningChannel(actor_id) => format!("Opening communication channel to actor {}", &actor_id[..8]),
-            LoadingState::InitializingMcp(status) => format!("Initializing MCP servers: {}", status),
+            LoadingState::ConnectingToServer(addr) => {
+                format!("Connecting to Theater server at {}", addr)
+            }
+            LoadingState::StartingActor(manifest) => format!(
+                "Starting chat-state actor from {}",
+                manifest.split('/').last().unwrap_or(manifest)
+            ),
+            LoadingState::OpeningChannel(actor_id) => {
+                format!("Opening communication channel to actor {}", &actor_id[..8])
+            }
+            LoadingState::InitializingMcp(status) => {
+                format!("Initializing MCP servers: {}", status)
+            }
             LoadingState::Ready => "System ready".to_string(),
         }
     }
@@ -105,4 +114,4 @@ pub struct Args {
 
 // Chat state actor manifest path
 pub const CHAT_STATE_ACTOR_MANIFEST: &str =
-    "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";
+    "https://github.com/colinrozzi/chat-state/releases/download/v0.1.1/manifest.toml";
