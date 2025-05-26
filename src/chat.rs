@@ -5,9 +5,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use theater::client::TheaterConnection;
+use theater_client::{TheaterConnection, ManagementCommand, ManagementResponse};
 use theater::id::TheaterId;
-use theater::theater_server::{ManagementCommand, ManagementResponse};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 

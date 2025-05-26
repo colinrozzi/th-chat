@@ -8,11 +8,9 @@ use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use theater::client::TheaterConnection;
-use theater::messages::ChannelParticipant;
-use theater::theater_server::ManagementCommand;
-use theater::theater_server::ManagementResponse;
+use theater_client::{TheaterConnection, ManagementCommand, ManagementResponse};
 use theater::TheaterId;
+use theater::messages::ChannelParticipant;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 

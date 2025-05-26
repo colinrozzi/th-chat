@@ -24,4 +24,5 @@ genai-types = { path = "/Users/colinrozzi/work/genai-types" }
 mcp-protocol = "0.2.0"
 
 # Local dependency on theater
-theater = { path = "/Users/colinrozzi/work/theater" }
+theater = { path = "/Users/colinrozzi/work/theater/crates/theater" }
+theater-client = { path = "/Users/colinrozzi/work/theater/crates/theater-client" }
