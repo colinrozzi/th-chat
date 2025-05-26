@@ -450,7 +450,7 @@ fn render_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let input_block = Block::default()
         .borders(Borders::ALL)
         .title(match app.input_mode {
-            InputMode::Normal => "Input (Press 'i' to edit, 'q' to quit, F1 for help)",
+            InputMode::Normal => "Input (Press 'i' to edit, 'q' to quit, 'h' for help)",
             InputMode::Editing => "Input (Press Esc to stop editing, Enter to send)",
         })
         .title_style(match app.input_mode {
@@ -483,12 +483,30 @@ fn render_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 /// Render the status bar
 fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args: &Args) {
-    let status_text = format!(
-        " Status: {} | Model: {} | Provider: {} | Messages: {} ",
+    let mode_text = match app.navigation_mode {
+        NavigationMode::Scroll => "SCROLL",
+        NavigationMode::Navigate => "NAVIGATE",
+    };
+    
+    let mode_color = match app.navigation_mode {
+        NavigationMode::Scroll => Color::Yellow,
+        NavigationMode::Navigate => Color::Magenta,
+    };
+    
+    // Create spans with different colors for the mode
+    let status_base = format!(
+        " Status: {} | Model: {} | Provider: {} | Messages: {} | Mode: ",
         app.connection_status, args.model, args.provider, app.messages.len()
     );
-    let status_paragraph = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    
+    let status_line = Line::from(vec![
+        Span::styled(status_base, Style::default().fg(Color::White)),
+        Span::styled(mode_text, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+        Span::styled(" ", Style::default().fg(Color::White)),
+    ]);
+    
+    let status_paragraph = Paragraph::new(vec![status_line])
+        .style(Style::default().bg(Color::DarkGray));
     f.render_widget(status_paragraph, area);
 }
 
@@ -527,7 +545,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  Esc        - Exit input mode / close popups"),
         Line::from("  Enter      - Send message (in input mode)"),
         Line::from("  q          - Quit application"),
-        Line::from("  F1         - Toggle this help"),
+        Line::from("  h / F1     - Toggle this help"),
         Line::from(""),
         Line::from(vec![
             Span::styled("Commands (type in input):", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
@@ -553,7 +571,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  between complete messages. In Navigate mode, each message"),
         Line::from("  gets highlighted with a visual indicator."),
         Line::from(""),
-        Line::from("Press F1 or Esc to close this help"),
+        Line::from("Press h/F1 or Esc to close this help"),
     ];
 
     let help_paragraph = Paragraph::new(help_text)

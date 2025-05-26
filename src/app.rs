@@ -328,6 +328,9 @@ impl App {
                         NavigationMode::Navigate => self.navigate_message_down(),
                     }
                 }
+                KeyCode::Char('h') => {
+                    self.toggle_help();
+                }
                 KeyCode::F(1) => {
                     self.toggle_help();
                 }
