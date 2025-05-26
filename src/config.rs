@@ -114,4 +114,4 @@ pub struct Args {
 
 // Chat state actor manifest path
 pub const CHAT_STATE_ACTOR_MANIFEST: &str =
-    "https://github.com/colinrozzi/chat-state/releases/download/v0.1.1/manifest.toml";
+    "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";

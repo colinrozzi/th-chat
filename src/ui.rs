@@ -34,7 +34,7 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
                 }
                 preview.push_str(&format!("[Tool: {}]", name));
             }
-            MessageContent::ToolResult { tool_use_id, .. } => {
+            MessageContent::ToolResult { tool_use_id, is_error, .. } => {
                 if !preview.is_empty() {
                     preview.push_str(" ");
                 }
@@ -43,7 +43,12 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
                 } else {
                     tool_use_id
                 };
-                preview.push_str(&format!("[Tool Result: {}]", id_preview));
+                let status = if is_error.unwrap_or(false) {
+                    "ERROR"
+                } else {
+                    "OK"
+                };
+                preview.push_str(&format!("[Tool Result {}: {}]", status, id_preview));
             }
         }
         
