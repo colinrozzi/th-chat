@@ -170,7 +170,7 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &Args) {
 
 /// Render the title bar
 fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &Args) {
-    let title = format!("🤖 th-chat - {}", args.title);
+    let title = format!("th-chat - {}", args.title);
     let title_paragraph = Paragraph::new(title)
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .alignment(Alignment::Center);
@@ -192,7 +192,6 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
             
             // Tool use header
             lines.push(Line::from(vec![
-                Span::styled("🔧 ", Style::default().fg(Color::Magenta)),
                 Span::styled("Tool Use: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                 Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             ]));
@@ -232,15 +231,14 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
             let mut lines = Vec::new();
             
             // Tool result header
-            let (icon, header_style) = if is_error.unwrap_or(false) {
-                ("❌", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            let (prefix, header_style) = if is_error.unwrap_or(false) {
+                ("Tool Result [ERROR]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
             } else {
-                ("✅", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                ("Tool Result [OK]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
             };
             
             lines.push(Line::from(vec![
-                Span::styled(format!("{} ", icon), header_style),
-                Span::styled("Tool Result", header_style),
+                Span::styled(prefix, header_style),
             ]));
             
             // Tool use ID reference
@@ -267,7 +265,7 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
                     }
                     mcp_protocol::tool::ToolContent::Image { data, mime_type } => {
                         lines.push(Line::from(vec![
-                            Span::styled("   📷 Image: ", Style::default().fg(Color::Cyan)),
+                            Span::styled("   Image: ", Style::default().fg(Color::Cyan)),
                             Span::styled(
                                 format!("{} ({} bytes)", mime_type, data.len()),
                                 Style::default().fg(Color::White),
@@ -276,7 +274,7 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
                     }
                     mcp_protocol::tool::ToolContent::Audio { data, mime_type } => {
                         lines.push(Line::from(vec![
-                            Span::styled("   🎵 Audio: ", Style::default().fg(Color::Cyan)),
+                            Span::styled("   Audio: ", Style::default().fg(Color::Cyan)),
                             Span::styled(
                                 format!("{} ({} bytes)", mime_type, data.len()),
                                 Style::default().fg(Color::White),
@@ -285,7 +283,7 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
                     }
                     mcp_protocol::tool::ToolContent::Resource { resource } => {
                         lines.push(Line::from(vec![
-                            Span::styled("   🔗 Resource: ", Style::default().fg(Color::Cyan)),
+                            Span::styled("   Resource: ", Style::default().fg(Color::Cyan)),
                             Span::styled(
                                 format!("{}", resource),
                                 Style::default().fg(Color::White),
@@ -316,9 +314,9 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     for chat_msg in &app.messages {
         let message = chat_msg.as_message();
         let (prefix, role_style) = match message.role {
-            Role::User => ("👤 You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Role::Assistant => ("🤖 Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Role::System => ("⚙️ System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Role::User => ("You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Role::Assistant => ("Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Role::System => ("System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         };
         
         // Add role header with completion info if available
@@ -340,7 +338,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         // Add token usage info for completions
         if let Some(completion) = chat_msg.as_completion() {
             let usage_text = format!(
-                "📊 Tokens: {} in, {} out | Stop: {:?}",
+                "Tokens: {} in, {} out | Stop: {:?}",
                 completion.usage.input_tokens,
                 completion.usage.output_tokens,
                 completion.stop_reason
@@ -457,7 +455,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
     f.render_widget(Clear, popup_area);
     
     let help_text = vec![
-        Line::from("🔧 th-chat Help"),
+        Line::from("th-chat Help"),
         Line::from(""),
         Line::from("Navigation:"),
         Line::from("  i          - Enter input mode"),
@@ -474,11 +472,11 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  /status    - Show connection status"),
         Line::from(""),
         Line::from("Message Types:"),
-        Line::from("  👤 User messages"),
-        Line::from("  🤖 Assistant messages"),
-        Line::from("  🔧 Tool use (function calls)"),
-        Line::from("  ✅ Tool results (success)"),
-        Line::from("  ❌ Tool results (error)"),
+        Line::from("  User messages"),
+        Line::from("  Assistant messages"),
+        Line::from("  Tool use (function calls)"),
+        Line::from("  Tool results (success)"),
+        Line::from("  Tool results (error)"),
         Line::from(""),
         Line::from("Press F1 or Esc to close this help"),
     ];
