@@ -12,6 +12,54 @@ use ratatui::{
 
 use crate::app::{App, InputMode, NavigationMode};
 use crate::config::Args;
+use genai_types::Message;
+
+/// Generate a preview text for a collapsed message
+fn get_message_preview(message: &Message, max_length: usize) -> String {
+    let mut preview = String::new();
+    
+    for content in &message.content {
+        match content {
+            MessageContent::Text { text } => {
+                if preview.is_empty() {
+                    preview = text.clone();
+                } else {
+                    preview.push_str(" ");
+                    preview.push_str(text);
+                }
+            }
+            MessageContent::ToolUse { name, .. } => {
+                if !preview.is_empty() {
+                    preview.push_str(" ");
+                }
+                preview.push_str(&format!("[Tool: {}]", name));
+            }
+            MessageContent::ToolResult { tool_use_id, .. } => {
+                if !preview.is_empty() {
+                    preview.push_str(" ");
+                }
+                preview.push_str(&format!("[Tool Result: {}]", &tool_use_id[..8]));
+            }
+        }
+        
+        // Stop if we're getting too long
+        if preview.len() > max_length {
+            break;
+        }
+    }
+    
+    // Truncate and add ellipsis if needed
+    if preview.len() > max_length {
+        preview.truncate(max_length.saturating_sub(3));
+        preview.push_str("...");
+    }
+    
+    if preview.is_empty() {
+        "[Empty message]".to_string()
+    } else {
+        preview
+    }
+}
 
 /// Render the main user interface
 pub fn render(f: &mut Frame, app: &mut App, args: &Args) {
@@ -304,7 +352,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         .borders(Borders::ALL)
         .title(match app.navigation_mode {
             NavigationMode::Scroll => "Chat (Scroll Mode)",
-            NavigationMode::Navigate => "Chat (Navigate Mode - j/k to move, v to toggle)",
+            NavigationMode::Navigate => "Chat (Navigate Mode - j/k to move, c to collapse, v to toggle)",
         })
         .title_style(match app.navigation_mode {
             NavigationMode::Scroll => Style::default().fg(Color::Yellow),
@@ -349,47 +397,83 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         all_items.push(ListItem::new(Line::from(Span::styled(header_with_indicator, role_style))));
         
         // Process each content item in the message
-        for content in &message.content {
-            let content_lines = format_message_content(content, available_width);
-            for line in content_lines {
-                // Apply background highlighting to selected message content
-                let styled_line = if is_selected {
-                    Line::from(
-                        line.spans.into_iter()
-                            .map(|span| Span::styled(
-                                format!("  {}", span.content),
-                                span.style.bg(Color::DarkGray)
-                            ))
-                            .collect::<Vec<_>>()
+        let is_collapsed = app.is_message_collapsed(msg_index);
+        
+        if is_collapsed {
+            // Show collapsed message as a single line with preview
+            let preview_text = get_message_preview(&message, 60);
+            let collapse_indicator = if is_selected {
+                "  [COLLAPSED] "
+            } else {
+                "  [COLLAPSED] "
+            };
+            
+            let collapsed_line = if is_selected {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{}{}", collapse_indicator, preview_text),
+                        Style::default().fg(Color::DarkGray).bg(Color::DarkGray)
                     )
-                } else {
-                    Line::from(
-                        line.spans.into_iter()
-                            .map(|span| Span::styled(
-                                format!("  {}", span.content),
-                                span.style
-                            ))
-                            .collect::<Vec<_>>()
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        collapse_indicator,
+                        Style::default().fg(Color::DarkGray)
+                    ),
+                    Span::styled(
+                        preview_text,
+                        Style::default().fg(Color::Gray)
                     )
-                };
-                all_items.push(ListItem::new(styled_line));
+                ])
+            };
+            all_items.push(ListItem::new(collapsed_line));
+        } else {
+            // Show full message content
+            for content in &message.content {
+                let content_lines = format_message_content(content, available_width);
+                for line in content_lines {
+                    // Apply background highlighting to selected message content
+                    let styled_line = if is_selected {
+                        Line::from(
+                            line.spans.into_iter()
+                                .map(|span| Span::styled(
+                                    format!("  {}", span.content),
+                                    span.style.bg(Color::DarkGray)
+                                ))
+                                .collect::<Vec<_>>()
+                        )
+                    } else {
+                        Line::from(
+                            line.spans.into_iter()
+                                .map(|span| Span::styled(
+                                    format!("  {}", span.content),
+                                    span.style
+                                ))
+                                .collect::<Vec<_>>()
+                        )
+                    };
+                    all_items.push(ListItem::new(styled_line));
+                }
             }
         }
         
-        // Add token usage info for completions
-        if let Some(completion) = chat_msg.as_completion() {
-            let usage_text = format!(
-                "  Tokens: {} in, {} out | Stop: {:?}",
-                completion.usage.input_tokens,
-                completion.usage.output_tokens,
-                completion.stop_reason
-            );
-            let usage_style = if is_selected {
-                Style::default().fg(Color::DarkGray).bg(Color::DarkGray)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            all_items.push(ListItem::new(Line::from(Span::styled(usage_text, usage_style))));
+        // Add token usage info for completions (only for non-collapsed messages)
+        if !is_collapsed {
+            if let Some(completion) = chat_msg.as_completion() {
+                let usage_text = format!(
+                    "  Tokens: {} in, {} out | Stop: {:?}",
+                    completion.usage.input_tokens,
+                    completion.usage.output_tokens,
+                    completion.stop_reason
+                );
+                let usage_style = if is_selected {
+                    Style::default().fg(Color::DarkGray).bg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                all_items.push(ListItem::new(Line::from(Span::styled(usage_text, usage_style))));
+            }
         }
         
         // Add spacing between messages
@@ -536,6 +620,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         ]),
         Line::from("  j / ↓       - Jump to next message"),
         Line::from("  k / ↑       - Jump to previous message"),
+        Line::from("  c          - Toggle collapse/expand selected message"),
         Line::from("  Selected message shows with ► indicator and highlighting"),
         Line::from(""),
         Line::from(vec![

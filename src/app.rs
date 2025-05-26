@@ -5,7 +5,7 @@ use futures::stream::StreamExt;
 use futures::FutureExt;
 use genai_types::{messages::Role, Message, MessageContent};
 use ratatui::{backend::Backend, Terminal};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use theater_client::{TheaterConnection, ManagementCommand, ManagementResponse};
@@ -89,6 +89,8 @@ pub struct App {
     pub selected_message_index: Option<usize>,
     /// Whether to show message selection highlighting
     pub show_message_selection: bool,
+    /// Set of collapsed message indices
+    pub collapsed_messages: std::collections::HashSet<usize>,
 }
 
 impl Default for App {
@@ -120,6 +122,7 @@ impl Default for App {
             navigation_mode: NavigationMode::Scroll,
             selected_message_index: None,
             show_message_selection: false,
+            collapsed_messages: std::collections::HashSet::new(),
         }
     }
 }
@@ -326,6 +329,12 @@ impl App {
                     match self.navigation_mode {
                         NavigationMode::Scroll => self.scroll_down(),
                         NavigationMode::Navigate => self.navigate_message_down(),
+                    }
+                }
+                KeyCode::Char('c') => {
+                    // Toggle collapse/expand for selected message (only in Navigate mode)
+                    if self.navigation_mode == NavigationMode::Navigate {
+                        self.toggle_message_collapse();
                     }
                 }
                 KeyCode::Char('h') => {
@@ -999,5 +1008,23 @@ impl App {
         } else {
             None
         }
+    }
+
+    /// Toggle collapse/expand state for the currently selected message
+    pub fn toggle_message_collapse(&mut self) {
+        if let Some(selected_index) = self.selected_message_index {
+            if selected_index < self.messages.len() {
+                if self.collapsed_messages.contains(&selected_index) {
+                    self.collapsed_messages.remove(&selected_index);
+                } else {
+                    self.collapsed_messages.insert(selected_index);
+                }
+            }
+        }
+    }
+
+    /// Check if a message is collapsed
+    pub fn is_message_collapsed(&self, index: usize) -> bool {
+        self.collapsed_messages.contains(&index)
     }
 }
