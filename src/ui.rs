@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, NavigationMode};
 use crate::config::Args;
 
 /// Render the main user interface
@@ -298,26 +298,39 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
     }
 }
 
-/// Render the chat messages area with enhanced tool use support
+/// Render the chat messages area with enhanced tool use support and message navigation
 fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     let messages_block = Block::default()
         .borders(Borders::ALL)
-        .title("Chat")
-        .title_style(Style::default().fg(Color::Yellow));
+        .title(match app.navigation_mode {
+            NavigationMode::Scroll => "Chat (Scroll Mode)",
+            NavigationMode::Navigate => "Chat (Navigate Mode - j/k to move, v to toggle)",
+        })
+        .title_style(match app.navigation_mode {
+            NavigationMode::Scroll => Style::default().fg(Color::Yellow),
+            NavigationMode::Navigate => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        });
 
     // Calculate available width for text wrapping (subtract borders and padding)
     let available_width = (area.width.saturating_sub(6)) as usize;
     
     // Flatten all messages into renderable items with proper line counting
     let mut all_items = Vec::new();
+    let selected_message_index = app.get_selected_message_index();
     
-    for chat_msg in &app.messages {
+    for (msg_index, chat_msg) in app.messages.iter().enumerate() {
         let message = chat_msg.as_message();
-        let (prefix, role_style) = match message.role {
+        let (prefix, mut role_style) = match message.role {
             Role::User => ("You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Role::Assistant => ("Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
             Role::System => ("System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         };
+        
+        // Highlight selected message
+        let is_selected = selected_message_index == Some(msg_index);
+        if is_selected {
+            role_style = role_style.bg(Color::White).fg(Color::Black);
+        }
         
         // Add role header with completion info if available
         let header_text = if let Some(completion) = chat_msg.as_completion() {
@@ -325,28 +338,58 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         } else {
             prefix.to_string()
         };
-        all_items.push(ListItem::new(Line::from(Span::styled(header_text, role_style))));
+        
+        // Add message selection indicator
+        let header_with_indicator = if is_selected {
+            format!("► {}", header_text)
+        } else {
+            format!("  {}", header_text)
+        };
+        
+        all_items.push(ListItem::new(Line::from(Span::styled(header_with_indicator, role_style))));
         
         // Process each content item in the message
         for content in &message.content {
             let content_lines = format_message_content(content, available_width);
             for line in content_lines {
-                all_items.push(ListItem::new(line));
+                // Apply background highlighting to selected message content
+                let styled_line = if is_selected {
+                    Line::from(
+                        line.spans.into_iter()
+                            .map(|span| Span::styled(
+                                format!("  {}", span.content),
+                                span.style.bg(Color::DarkGray)
+                            ))
+                            .collect::<Vec<_>>()
+                    )
+                } else {
+                    Line::from(
+                        line.spans.into_iter()
+                            .map(|span| Span::styled(
+                                format!("  {}", span.content),
+                                span.style
+                            ))
+                            .collect::<Vec<_>>()
+                    )
+                };
+                all_items.push(ListItem::new(styled_line));
             }
         }
         
         // Add token usage info for completions
         if let Some(completion) = chat_msg.as_completion() {
             let usage_text = format!(
-                "Tokens: {} in, {} out | Stop: {:?}",
+                "  Tokens: {} in, {} out | Stop: {:?}",
                 completion.usage.input_tokens,
                 completion.usage.output_tokens,
                 completion.stop_reason
             );
-            all_items.push(ListItem::new(Line::from(Span::styled(
-                usage_text,
+            let usage_style = if is_selected {
+                Style::default().fg(Color::DarkGray).bg(Color::DarkGray)
+            } else {
                 Style::default().fg(Color::DarkGray)
-            ))));
+            };
+            all_items.push(ListItem::new(Line::from(Span::styled(usage_text, usage_style))));
         }
         
         // Add spacing between messages
@@ -449,34 +492,66 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
     f.render_widget(status_paragraph, area);
 }
 
-/// Render the help popup
+/// Render the enhanced help popup with navigation instructions
 fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
-    let popup_area = centered_rect(60, 70, area);
+    let popup_area = centered_rect(70, 80, area);
     f.render_widget(Clear, popup_area);
     
     let help_text = vec![
-        Line::from("th-chat Help"),
+        Line::from(vec![
+            Span::styled("th-chat Help", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ]),
         Line::from(""),
-        Line::from("Navigation:"),
+        Line::from(vec![
+            Span::styled("Navigation Modes:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]),
+        Line::from("  v          - Toggle between Scroll and Navigate modes"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Scroll Mode (default):", Style::default().fg(Color::Green))
+        ]),
+        Line::from("  j / ↓       - Scroll down through chat"),
+        Line::from("  k / ↑       - Scroll up through chat"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Navigate Mode:", Style::default().fg(Color::Magenta))
+        ]),
+        Line::from("  j / ↓       - Jump to next message"),
+        Line::from("  k / ↑       - Jump to previous message"),
+        Line::from("  Selected message shows with ► indicator and highlighting"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Input & General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]),
         Line::from("  i          - Enter input mode"),
-        Line::from("  Esc        - Exit input mode"),
+        Line::from("  Esc        - Exit input mode / close popups"),
         Line::from("  Enter      - Send message (in input mode)"),
-        Line::from("  ↑/↓        - Scroll messages"),
         Line::from("  q          - Quit application"),
         Line::from("  F1         - Toggle this help"),
         Line::from(""),
-        Line::from("Commands (type in input):"),
+        Line::from(vec![
+            Span::styled("Commands (type in input):", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]),
         Line::from("  /help      - Show help information"),
         Line::from("  /clear     - Clear conversation"),
         Line::from("  /debug     - Toggle debug mode"),
         Line::from("  /status    - Show connection status"),
         Line::from(""),
-        Line::from("Message Types:"),
-        Line::from("  User messages"),
-        Line::from("  Assistant messages"),
-        Line::from("  Tool use (function calls)"),
-        Line::from("  Tool results (success)"),
-        Line::from("  Tool results (error)"),
+        Line::from(vec![
+            Span::styled("Message Types:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]),
+        Line::from("  User messages (green)"),
+        Line::from("  Assistant messages (blue)"),
+        Line::from("  Tool use (function calls - magenta)"),
+        Line::from("  Tool results (success/error - green/red)"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Vim-Style Navigation:", Style::default().fg(Color::Cyan))
+        ]),
+        Line::from("  The navigation system is inspired by vim's movement commands."),
+        Line::from("  Use 'v' to toggle between scrolling through text and jumping"),
+        Line::from("  between complete messages. In Navigate mode, each message"),
+        Line::from("  gets highlighted with a visual indicator."),
         Line::from(""),
         Line::from("Press F1 or Esc to close this help"),
     ];
@@ -484,7 +559,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
     let help_paragraph = Paragraph::new(help_text)
         .block(
             Block::default()
-                .title("Help")
+                .title("Help - Vim-Style Navigation")
                 .borders(Borders::ALL)
                 .title_style(Style::default().fg(Color::Yellow)),
         )

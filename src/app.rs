@@ -25,6 +25,15 @@ pub enum InputMode {
     Editing,
 }
 
+/// Message navigation state
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavigationMode {
+    /// Normal scrolling mode (existing behavior)
+    Scroll,
+    /// Message navigation mode (vim-style j/k navigation)
+    Navigate,
+}
+
 /// Application state
 #[derive(Debug)]
 pub struct App {
@@ -74,6 +83,12 @@ pub struct App {
     pub boot_cursor_visible: bool,
     /// Last boot animation update
     pub last_boot_update: Instant,
+    /// Current navigation mode
+    pub navigation_mode: NavigationMode,
+    /// Index of currently selected message (when in Navigate mode)
+    pub selected_message_index: Option<usize>,
+    /// Whether to show message selection highlighting
+    pub show_message_selection: bool,
 }
 
 impl Default for App {
@@ -102,6 +117,9 @@ impl Default for App {
             current_step_index: 0,
             boot_cursor_visible: true,
             last_boot_update: Instant::now(),
+            navigation_mode: NavigationMode::Scroll,
+            selected_message_index: None,
+            show_message_selection: false,
         }
     }
 }
@@ -280,11 +298,35 @@ impl App {
                 KeyCode::Char('i') => {
                     self.input_mode = InputMode::Editing;
                 }
+                // Vim-style navigation
+                KeyCode::Char('j') => {
+                    match self.navigation_mode {
+                        NavigationMode::Scroll => self.scroll_down(),
+                        NavigationMode::Navigate => self.navigate_message_down(),
+                    }
+                }
+                KeyCode::Char('k') => {
+                    match self.navigation_mode {
+                        NavigationMode::Scroll => self.scroll_up(),
+                        NavigationMode::Navigate => self.navigate_message_up(),
+                    }
+                }
+                // Toggle between scroll and navigate modes
+                KeyCode::Char('v') => {
+                    self.toggle_navigation_mode();
+                }
+                // Traditional arrow key navigation (still works in scroll mode)
                 KeyCode::Up => {
-                    self.scroll_up();
+                    match self.navigation_mode {
+                        NavigationMode::Scroll => self.scroll_up(),
+                        NavigationMode::Navigate => self.navigate_message_up(),
+                    }
                 }
                 KeyCode::Down => {
-                    self.scroll_down();
+                    match self.navigation_mode {
+                        NavigationMode::Scroll => self.scroll_down(),
+                        NavigationMode::Navigate => self.navigate_message_down(),
+                    }
                 }
                 KeyCode::F(1) => {
                     self.toggle_help();
@@ -836,5 +878,123 @@ impl App {
     /// Set connection status
     pub fn set_connection_status(&mut self, status: String) {
         self.connection_status = status;
+    }
+
+    /// Toggle between scroll and navigate modes
+    pub fn toggle_navigation_mode(&mut self) {
+        match self.navigation_mode {
+            NavigationMode::Scroll => {
+                self.navigation_mode = NavigationMode::Navigate;
+                self.show_message_selection = true;
+                // Start at the most recent message
+                if !self.messages.is_empty() {
+                    self.selected_message_index = Some(self.messages.len() - 1);
+                }
+            }
+            NavigationMode::Navigate => {
+                self.navigation_mode = NavigationMode::Scroll;
+                self.show_message_selection = false;
+                self.selected_message_index = None;
+            }
+        }
+    }
+
+    /// Navigate to previous message (vim k)
+    pub fn navigate_message_up(&mut self) {
+        if self.navigation_mode == NavigationMode::Navigate && !self.messages.is_empty() {
+            match self.selected_message_index {
+                Some(index) if index > 0 => {
+                    self.selected_message_index = Some(index - 1);
+                    self.ensure_selected_message_visible();
+                }
+                None => {
+                    // Start from the bottom if no selection
+                    self.selected_message_index = Some(self.messages.len() - 1);
+                    self.ensure_selected_message_visible();
+                }
+                _ => {} // Already at top
+            }
+        }
+    }
+
+    /// Navigate to next message (vim j)  
+    pub fn navigate_message_down(&mut self) {
+        if self.navigation_mode == NavigationMode::Navigate && !self.messages.is_empty() {
+            match self.selected_message_index {
+                Some(index) if index < self.messages.len() - 1 => {
+                    self.selected_message_index = Some(index + 1);
+                    self.ensure_selected_message_visible();
+                }
+                None => {
+                    // Start from the top if no selection
+                    self.selected_message_index = Some(0);
+                    self.ensure_selected_message_visible();
+                }
+                _ => {} // Already at bottom
+            }
+        }
+    }
+
+    /// Ensure the selected message is visible on screen
+    fn ensure_selected_message_visible(&mut self) {
+        if let Some(selected_index) = self.selected_message_index {
+            // Calculate the line position of the selected message
+            let mut line_count = 0;
+            let available_width = 70; // Estimate, should match UI calculation
+            
+            for (msg_index, chat_msg) in self.messages.iter().enumerate() {
+                let message_start_line = line_count;
+                
+                // Count lines for this message (similar to UI calculation)
+                let message = chat_msg.as_message();
+                line_count += 1; // Role header
+                
+                for content in &message.content {
+                    line_count += match content {
+                        MessageContent::Text { text } => {
+                            (text.len() / available_width) + 1
+                        }
+                        MessageContent::ToolUse { .. } => 6, // Estimated lines for tool use
+                        MessageContent::ToolResult { content, .. } => {
+                            3 + content.len() * 2 // Estimated lines for tool result
+                        }
+                    };
+                }
+                
+                if let Some(_completion) = chat_msg.as_completion() {
+                    line_count += 1; // Token usage line
+                }
+                line_count += 1; // Empty line between messages
+                
+                // If this is our selected message, adjust scroll to make it visible
+                if msg_index == selected_index {
+                    let available_height = 20; // Estimate
+                    let total_lines = self.calculate_total_display_lines();
+                    
+                    if total_lines > available_height {
+                        let max_scroll = total_lines.saturating_sub(available_height);
+                        
+                        // If message is above current view, scroll up to show it
+                        if message_start_line < (total_lines - available_height - self.vertical_scroll) {
+                            self.vertical_scroll = max_scroll.saturating_sub(message_start_line);
+                        }
+                        // If message is below current view, scroll down to show it
+                        else if message_start_line >= (total_lines - self.vertical_scroll) {
+                            self.vertical_scroll = (total_lines - message_start_line).saturating_sub(available_height);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Get the currently selected message index for UI highlighting
+    pub fn get_selected_message_index(&self) -> Option<usize> {
+        if self.show_message_selection {
+            self.selected_message_index
+        } else {
+            None
+        }
     }
 }
