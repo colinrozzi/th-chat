@@ -402,7 +402,7 @@ impl ChatManager {
     }
 
     /// Get the current head from the chat-state actor
-    pub async fn get_current_head(&mut self) -> Result<Option<String>> {
+    pub async fn get_current_head(&self) -> Result<Option<String>> {
         info!("Getting current head from chat-state actor");
 
         let actor_id_parsed: TheaterId =
@@ -653,6 +653,61 @@ impl ChatManager {
                 }
                 ManagementResponse::Error { error } => {
                     return Err(anyhow::anyhow!("Error generating completion: {:?}", error));
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    /// Get the full conversation history from the chat-state actor
+    pub async fn get_history(&self) -> Result<Vec<ChatMessage>> {
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
+        let history_request = json!({
+            "type": "get_history"
+        });
+
+        // Send the history request
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&history_request)
+                    .context("Failed to serialize history request")?,
+            })
+            .await
+            .context("Failed to send history request")?;
+        }
+
+        // Wait for the response
+        loop {
+            let mut conn = self.connection.lock().await;
+            let response = conn.receive().await?;
+            match response {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    let response: ChatStateResponse = serde_json::from_slice(&message)
+                        .context("Failed to parse history response")?;
+
+                    match response {
+                        ChatStateResponse::History { messages } => {
+                            info!(
+                                "Received conversation history with {} messages",
+                                messages.len()
+                            );
+                            return Ok(messages);
+                        }
+                        ChatStateResponse::Error { error } => {
+                            return Err(anyhow::anyhow!(
+                                "Error getting history: {:?}",
+                                error
+                            ));
+                        }
+                        _ => continue,
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error getting history: {:?}", error));
                 }
                 _ => continue,
             }

@@ -12,7 +12,7 @@ use theater::messages::ChannelParticipant;
 use theater::TheaterId;
 use theater_client::TheaterConnection;
 use theater_server::{ManagementCommand, ManagementResponse};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
@@ -157,6 +157,10 @@ impl App {
             },
             LoadingStep {
                 message: "Saving session data".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Syncing conversation history".to_string(),
                 status: StepStatus::Pending,
             },
             LoadingStep {
@@ -636,6 +640,60 @@ impl App {
         self.message_chain.clear();
         self.client_head = None;
         self.update_scroll();
+    }
+
+    /// Sync conversation history with the chat-state actor
+    pub async fn sync_conversation_history(&mut self, chat_manager: &ChatManager) -> Result<()> {
+        info!("Syncing conversation history with chat-state actor");
+        
+        // Get the current head from the server
+        let server_head = match chat_manager.get_current_head().await {
+            Ok(head) => head,
+            Err(e) => {
+                warn!("Failed to get server head: {}", e);
+                return Ok(()); // Don't fail the whole process
+            }
+        };
+        
+        info!("Server head: {:?}, Client head: {:?}", server_head, self.client_head);
+        
+        // If heads match, we're already in sync
+        if server_head == self.client_head {
+            info!("Already in sync with server");
+            return Ok(());
+        }
+        
+        // If we have no messages or heads don't match, get the full history
+        if self.message_chain.is_empty() || server_head != self.client_head {
+            info!("Getting full conversation history from server");
+            
+            match chat_manager.get_history().await {
+                Ok(history) => {
+                    info!("Received {} messages from history", history.len());
+                    
+                    // Clear current state and rebuild from history
+                    self.clear_conversation();
+                    
+                    // Add all messages from history
+                    for (index, message) in history.iter().enumerate() {
+                        self.add_message_to_chain(message.clone());
+                        info!("Loaded message {}/{}: {:?}", index + 1, history.len(), 
+                             message.id.as_ref().unwrap_or(&"unknown".to_string()));
+                    }
+                    
+                    // Update our head to match the server
+                    self.client_head = server_head;
+                    
+                    info!("Successfully synced {} messages from conversation history", history.len());
+                }
+                Err(e) => {
+                    warn!("Failed to get conversation history: {}", e);
+                    // Don't fail - continue with empty state
+                }
+            }
+        }
+        
+        Ok(())
     }
 
     /// Add a message to the conversation (legacy method for compatibility)

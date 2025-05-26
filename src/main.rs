@@ -265,8 +265,34 @@ async fn run_app(
         terminal.draw(|f| ui::render(f, &mut app, &args))?;
     }
 
-    // Step 7: Prepare chat interface
-    app.start_loading_step(7, Some("Preparing chat interface...".to_string()));
+    // Step 7: Sync conversation history (if resuming session)
+    if existing_session.is_some() {
+        app.start_loading_step(7, Some("Syncing conversation history...".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        
+        match app.sync_conversation_history(&chat_manager).await {
+            Ok(_) => {
+                info!("Conversation history synced successfully");
+                app.complete_current_step();
+            }
+            Err(e) => {
+                warn!("Failed to sync conversation history: {}", e);
+                app.fail_current_step(format!("History sync failed: {}", e));
+            }
+        }
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    } else {
+        // Skip history sync for new sessions
+        app.start_loading_step(7, Some("Skipping history sync (new session)".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        app.complete_current_step();
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+    }
+
+    // Step 8: Prepare chat interface
+    app.start_loading_step(8, Some("Preparing chat interface...".to_string()));
     terminal.draw(|f| ui::render(f, &mut app, &args))?;
     
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
