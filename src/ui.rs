@@ -512,7 +512,7 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
 
 /// Render the enhanced help popup with navigation instructions
 fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
-    let popup_area = centered_rect(70, 80, area);
+    let popup_area = centered_rect(80, 90, area);
     f.render_widget(Clear, popup_area);
     
     let help_text = vec![
@@ -548,28 +548,14 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  h / F1     - Toggle this help"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Commands (type in input):", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            Span::styled("Commands:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         ]),
-        Line::from("  /help      - Show help information"),
-        Line::from("  /clear     - Clear conversation"),
-        Line::from("  /debug     - Toggle debug mode"),
-        Line::from("  /status    - Show connection status"),
+        Line::from("  /help /clear /debug /status  (type in input area)"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Message Types:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            Span::styled("Tips:", Style::default().fg(Color::Cyan))
         ]),
-        Line::from("  User messages (green)"),
-        Line::from("  Assistant messages (blue)"),
-        Line::from("  Tool use (function calls - magenta)"),
-        Line::from("  Tool results (success/error - green/red)"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Vim-Style Navigation:", Style::default().fg(Color::Cyan))
-        ]),
-        Line::from("  The navigation system is inspired by vim's movement commands."),
-        Line::from("  Use 'v' to toggle between scrolling through text and jumping"),
-        Line::from("  between complete messages. In Navigate mode, each message"),
-        Line::from("  gets highlighted with a visual indicator."),
+        Line::from("  Press 'v' to toggle modes • 'h' to toggle help • 'q' to quit"),
         Line::from(""),
         Line::from("Press h/F1 or Esc to close this help"),
     ];
@@ -579,10 +565,12 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
             Block::default()
                 .title("Help - Vim-Style Navigation")
                 .borders(Borders::ALL)
-                .title_style(Style::default().fg(Color::Yellow)),
+                .title_style(Style::default().fg(Color::Yellow))
+                .style(Style::default().bg(Color::Black).fg(Color::White)),
         )
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .wrap(Wrap { trim: true });
-    f.render_widget(help_paragraph, area);
+    f.render_widget(help_paragraph, popup_area);
 }
 
 /// Helper function to create a centered rect

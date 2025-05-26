@@ -282,7 +282,7 @@ impl App {
         // Handle help popup
         if self.show_help {
             match key_event.code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(1) => {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::F(1) => {
                     self.toggle_help();
                 }
                 _ => {}
