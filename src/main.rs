@@ -7,16 +7,18 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::fs::OpenOptions;
 use std::io;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
 mod chat;
 mod config;
+mod persistence;
 mod ui;
 
 use app::App;
 use config::{Args, CHAT_STATE_ACTOR_MANIFEST};
+use persistence::{SessionData, session_exists, load_session, save_session, clear_session};
 
 fn setup_logging() -> Result<()> {
     // Create logs directory if it doesn't exist
@@ -86,8 +88,40 @@ async fn run_app(
 ) -> Result<()> {
     info!("Starting run_app with server: {}", args.server);
 
+    // Handle session clearing if requested
+    let session_dir = args.session_dir.as_ref().map(|s| std::path::Path::new(s));
+    if args.clear_session {
+        match clear_session(session_dir) {
+            Ok(_) => info!("Existing session cleared successfully"),
+            Err(e) => warn!("Failed to clear session: {}", e),
+        }
+    }
+
+    // Check for existing session first
+    let existing_session = if !args.no_session && !args.clear_session && session_exists(session_dir) {
+        match load_session(session_dir) {
+            Ok(session) => {
+                info!("Found existing session - conversation_id: {}, store_id: {}", 
+                     session.conversation_id, session.store_id);
+                Some(session)
+            }
+            Err(e) => {
+                warn!("Failed to load existing session: {}, starting new session", e);
+                None
+            }
+        }
+    } else {
+        info!("No existing session found or session persistence disabled");
+        None
+    };
+
     // Step 0: Initialize (already set as InProgress in App::new())
-    app.start_loading_step(0, None);
+    let init_message = if existing_session.is_some() {
+        "Resuming existing session..."
+    } else {
+        "Initializing new session..."
+    };
+    app.start_loading_step(0, Some(init_message.to_string()));
     terminal.draw(|f| ui::render(f, &mut app, &args))?;
     
     // Small delay to show the initialization step
@@ -133,7 +167,7 @@ async fn run_app(
     terminal.draw(|f| ui::render(f, &mut app, &args))?;
     
     info!("Starting chat-state actor...");
-    let actor_id = match chat::ChatManager::start_actor(&mut connection, &args).await {
+    let actor_id = match chat::ChatManager::start_actor_with_session(&mut connection, &args, existing_session.as_ref()).await {
         Ok(id) => {
             info!("Actor started successfully: {:?}", id);
             app.complete_current_step();
@@ -190,8 +224,49 @@ async fn run_app(
         terminal.draw(|f| ui::render(f, &mut app, &args))?;
     }
 
-    // Step 6: Prepare chat interface
-    app.start_loading_step(6, None);
+    // Step 6: Save session data (if enabled and new session)
+    if !args.no_session && existing_session.is_none() {
+        app.start_loading_step(6, Some("Saving session data...".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        
+        // Get metadata from the actor and save session
+        match chat_manager.get_metadata().await {
+            Ok((conversation_id, store_id)) => {
+                let session_data = SessionData::new(conversation_id, store_id);
+                match save_session(&session_data, session_dir) {
+                    Ok(_) => {
+                        info!("Session data saved successfully");
+                        app.complete_current_step();
+                    }
+                    Err(e) => {
+                        warn!("Failed to save session: {}", e);
+                        app.fail_current_step(format!("Session save failed: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to get metadata for session: {}", e);
+                app.fail_current_step(format!("Metadata retrieval failed: {}", e));
+            }
+        }
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    } else {
+        // Skip session saving
+        let skip_message = if args.no_session {
+            "Session persistence disabled"
+        } else {
+            "Using existing session data"
+        };
+        app.start_loading_step(6, Some(skip_message.to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        app.complete_current_step();
+        terminal.draw(|f| ui::render(f, &mut app, &args))?;
+    }
+
+    // Step 7: Prepare chat interface
+    app.start_loading_step(7, Some("Preparing chat interface...".to_string()));
     terminal.draw(|f| ui::render(f, &mut app, &args))?;
     
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;

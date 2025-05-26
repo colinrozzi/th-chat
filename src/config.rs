@@ -110,6 +110,18 @@ pub struct Args {
     /// Path to MCP servers configuration file (JSON)
     #[clap(long, env = "THEATER_CHAT_MCP_CONFIG")]
     pub mcp_config: Option<String>,
+
+    /// Disable session persistence (always start a new conversation)
+    #[clap(long, default_value = "false")]
+    pub no_session: bool,
+
+    /// Directory to store session file (defaults to current directory)
+    #[clap(long, env = "THEATER_CHAT_SESSION_DIR")]
+    pub session_dir: Option<String>,
+
+    /// Clear existing session and start fresh
+    #[clap(long, default_value = "false")]
+    pub clear_session: bool,
 }
 
 // Chat state actor manifest path

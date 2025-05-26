@@ -156,6 +156,10 @@ impl App {
                 status: StepStatus::Pending,
             },
             LoadingStep {
+                message: "Saving session data".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
                 message: "Preparing chat interface".to_string(),
                 status: StepStatus::Pending,
             },

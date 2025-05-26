@@ -94,6 +94,11 @@ pub enum ChatStateResponse {
     ChatMessage { message: ChatMessage },
     #[serde(rename = "error")]
     Error { error: ErrorInfo },
+    #[serde(rename = "metadata")]
+    Metadata {
+        conversation_id: String,
+        store_id: String,
+    },
     #[serde(rename = "success")]
     Success,
 }
@@ -141,8 +146,36 @@ impl ChatManager {
         connection: &mut TheaterConnection,
         _args: &Args,
     ) -> Result<TheaterId> {
+        Self::start_actor_with_session(connection, _args, None).await
+    }
+
+    /// Start the chat-state actor with optional session data
+    pub async fn start_actor_with_session(
+        connection: &mut TheaterConnection,
+        _args: &Args,
+        session_data: Option<&crate::persistence::SessionData>,
+    ) -> Result<TheaterId> {
         info!("Starting chat-state actor");
         
+        // Prepare initial state from session data if available
+        let initial_state = if let Some(session) = session_data {
+            info!(
+                "Starting chat-state actor with existing session - conversation_id: {}, store_id: {}",
+                session.conversation_id, session.store_id
+            );
+            let init_data = serde_json::json!({
+                "store_id": session.store_id,
+                "conversation_id": session.conversation_id,
+                "config": null
+            });
+            Some(serde_json::to_vec(&init_data).context("Failed to serialize session data")?)
+        } else {
+            info!("Starting chat-state actor with new session");
+            // Create minimal init data for new session
+            let init_data = serde_json::json!({});
+            Some(serde_json::to_vec(&init_data).context("Failed to serialize empty init data")?)
+        };
+
         // Start chat-state actor
         info!(
             "Starting chat-state actor with manifest: {}",
@@ -150,7 +183,7 @@ impl ChatManager {
         );
         let start_actor_cmd = ManagementCommand::StartActor {
             manifest: CHAT_STATE_ACTOR_MANIFEST.to_string(),
-            initial_state: None,
+            initial_state,
             parent: false,
             subscribe: false,
         };
@@ -620,6 +653,64 @@ impl ChatManager {
                 }
                 ManagementResponse::Error { error } => {
                     return Err(anyhow::anyhow!("Error generating completion: {:?}", error));
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    /// Get metadata (conversation_id and store_id) from the chat-state actor
+    pub async fn get_metadata(&self) -> Result<(String, String)> {
+        let actor_id_parsed: TheaterId =
+            self.actor_id.parse().context("Failed to parse actor ID")?;
+
+        let metadata_request = json!({
+            "type": "get_metadata"
+        });
+
+        // Send the metadata request
+        {
+            let mut conn = self.connection.lock().await;
+            conn.send(ManagementCommand::RequestActorMessage {
+                id: actor_id_parsed,
+                data: serde_json::to_vec(&metadata_request)
+                    .context("Failed to serialize metadata request")?,
+            })
+            .await
+            .context("Failed to send metadata request")?;
+        }
+
+        // Wait for the response
+        loop {
+            let mut conn = self.connection.lock().await;
+            let response = conn.receive().await?;
+            match response {
+                ManagementResponse::RequestedMessage { message, .. } => {
+                    let response: ChatStateResponse = serde_json::from_slice(&message)
+                        .context("Failed to parse metadata response")?;
+
+                    match response {
+                        ChatStateResponse::Metadata {
+                            conversation_id,
+                            store_id,
+                        } => {
+                            info!(
+                                "Received metadata - conversation_id: {}, store_id: {}",
+                                conversation_id, store_id
+                            );
+                            return Ok((conversation_id, store_id));
+                        }
+                        ChatStateResponse::Error { error } => {
+                            return Err(anyhow::anyhow!(
+                                "Error getting metadata: {:?}",
+                                error
+                            ));
+                        }
+                        _ => continue,
+                    }
+                }
+                ManagementResponse::Error { error } => {
+                    return Err(anyhow::anyhow!("Error getting metadata: {:?}", error));
                 }
                 _ => continue,
             }
