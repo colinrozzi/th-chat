@@ -599,11 +599,24 @@ impl App {
 
     /// Add a message to the chain, maintaining the linked structure
     fn add_message_to_chain(&mut self, message: ChatMessage) {
-        let message_id = message.id.as_ref().unwrap().clone();
+        // Generate an ID if the message doesn't have one
+        let message_id = match message.id.as_ref() {
+            Some(id) => id.clone(),
+            None => {
+                // Generate a unique ID for messages without one
+                let generated_id = format!("msg-{}", Uuid::new_v4());
+                warn!("Message has no ID, generating: {}", generated_id);
+                generated_id
+            }
+        };
+
+        // Create a new message with the guaranteed ID
+        let mut message_with_id = message.clone();
+        message_with_id.id = Some(message_id.clone());
 
         // Store the message
         self.messages_by_id
-            .insert(message_id.clone(), message.clone());
+            .insert(message_id.clone(), message_with_id);
 
         // Add to chain if not already present
         if !self.message_chain.contains(&message_id) {
@@ -676,9 +689,11 @@ impl App {
                     
                     // Add all messages from history
                     for (index, message) in history.iter().enumerate() {
+                        let msg_id = message.id.as_ref().map(|s| s.as_str()).unwrap_or("<no-id>");
+                        info!("Loading message {}/{}: id={}, has_content={}", 
+                             index + 1, history.len(), msg_id, 
+                             !message.as_message().content.is_empty());
                         self.add_message_to_chain(message.clone());
-                        info!("Loaded message {}/{}: {:?}", index + 1, history.len(), 
-                             message.id.as_ref().unwrap_or(&"unknown".to_string()));
                     }
                     
                     // Update our head to match the server
