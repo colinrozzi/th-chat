@@ -38,7 +38,12 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
                 if !preview.is_empty() {
                     preview.push_str(" ");
                 }
-                preview.push_str(&format!("[Tool Result: {}]", &tool_use_id[..8]));
+                let id_preview = if tool_use_id.len() >= 8 {
+                    &tool_use_id[..8]
+                } else {
+                    tool_use_id
+                };
+                preview.push_str(&format!("[Tool Result: {}]", id_preview));
             }
         }
         
