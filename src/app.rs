@@ -8,10 +8,10 @@ use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+use theater::messages::ChannelParticipant;
+use theater::TheaterId;
 use theater_client::TheaterConnection;
 use theater_server::{ManagementCommand, ManagementResponse};
-use theater::TheaterId;
-use theater::messages::ChannelParticipant;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
@@ -228,15 +228,20 @@ impl App {
                                 error!("Failed to parse message payload");
                             }
                         }
+                        Ok(ManagementResponse::ChannelOpened { channel_id, .. }) => {
+                            info!("Channel opened: {}", channel_id);
+                        }
                         Ok(ManagementResponse::ChannelClosed { .. }) => {
                             info!("Channel closed by server");
                             break;
                         }
                         Err(e) => {
                             error!("Error receiving message: {:?}", e);
+                            break;
                         }
                         _ => {
-                            error!("Unexpected message type");
+                            error!("Unexpected message type {}", msg.unwrap_err());
+                            break;
                         }
                     }
                 }
@@ -303,35 +308,27 @@ impl App {
                     self.input_mode = InputMode::Editing;
                 }
                 // Vim-style navigation
-                KeyCode::Char('j') => {
-                    match self.navigation_mode {
-                        NavigationMode::Scroll => self.scroll_down(),
-                        NavigationMode::Navigate => self.navigate_message_down(),
-                    }
-                }
-                KeyCode::Char('k') => {
-                    match self.navigation_mode {
-                        NavigationMode::Scroll => self.scroll_up(),
-                        NavigationMode::Navigate => self.navigate_message_up(),
-                    }
-                }
+                KeyCode::Char('j') => match self.navigation_mode {
+                    NavigationMode::Scroll => self.scroll_down(),
+                    NavigationMode::Navigate => self.navigate_message_down(),
+                },
+                KeyCode::Char('k') => match self.navigation_mode {
+                    NavigationMode::Scroll => self.scroll_up(),
+                    NavigationMode::Navigate => self.navigate_message_up(),
+                },
                 // Toggle between scroll and navigate modes
                 KeyCode::Char('v') => {
                     self.toggle_navigation_mode();
                 }
                 // Traditional arrow key navigation (still works in scroll mode)
-                KeyCode::Up => {
-                    match self.navigation_mode {
-                        NavigationMode::Scroll => self.scroll_up(),
-                        NavigationMode::Navigate => self.navigate_message_up(),
-                    }
-                }
-                KeyCode::Down => {
-                    match self.navigation_mode {
-                        NavigationMode::Scroll => self.scroll_down(),
-                        NavigationMode::Navigate => self.navigate_message_down(),
-                    }
-                }
+                KeyCode::Up => match self.navigation_mode {
+                    NavigationMode::Scroll => self.scroll_up(),
+                    NavigationMode::Navigate => self.navigate_message_up(),
+                },
+                KeyCode::Down => match self.navigation_mode {
+                    NavigationMode::Scroll => self.scroll_down(),
+                    NavigationMode::Navigate => self.navigate_message_down(),
+                },
                 KeyCode::Char('c') => {
                     // Toggle collapse/expand for selected message (only in Navigate mode)
                     if self.navigation_mode == NavigationMode::Navigate {
@@ -954,46 +951,47 @@ impl App {
             // Calculate the line position of the selected message
             let mut line_count = 0;
             let available_width = 70; // Estimate, should match UI calculation
-            
+
             for (msg_index, chat_msg) in self.messages.iter().enumerate() {
                 let message_start_line = line_count;
-                
+
                 // Count lines for this message (similar to UI calculation)
                 let message = chat_msg.as_message();
                 line_count += 1; // Role header
-                
+
                 for content in &message.content {
                     line_count += match content {
-                        MessageContent::Text { text } => {
-                            (text.len() / available_width) + 1
-                        }
+                        MessageContent::Text { text } => (text.len() / available_width) + 1,
                         MessageContent::ToolUse { .. } => 6, // Estimated lines for tool use
                         MessageContent::ToolResult { content, .. } => {
                             3 + content.len() * 2 // Estimated lines for tool result
                         }
                     };
                 }
-                
+
                 if let Some(_completion) = chat_msg.as_completion() {
                     line_count += 1; // Token usage line
                 }
                 line_count += 1; // Empty line between messages
-                
+
                 // If this is our selected message, adjust scroll to make it visible
                 if msg_index == selected_index {
                     let available_height = 20; // Estimate
                     let total_lines = self.calculate_total_display_lines();
-                    
+
                     if total_lines > available_height {
                         let max_scroll = total_lines.saturating_sub(available_height);
-                        
+
                         // If message is above current view, scroll up to show it
-                        if message_start_line < (total_lines - available_height - self.vertical_scroll) {
+                        if message_start_line
+                            < (total_lines - available_height - self.vertical_scroll)
+                        {
                             self.vertical_scroll = max_scroll.saturating_sub(message_start_line);
                         }
                         // If message is below current view, scroll down to show it
                         else if message_start_line >= (total_lines - self.vertical_scroll) {
-                            self.vertical_scroll = (total_lines - message_start_line).saturating_sub(available_height);
+                            self.vertical_scroll =
+                                (total_lines - message_start_line).saturating_sub(available_height);
                         }
                     }
                     break;
