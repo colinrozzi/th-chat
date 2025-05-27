@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Simple CLI tool to interact with chat-state actor in the Theater runtime"
 
+[lib]
+name = "th_chat"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive", "env"] }
@@ -18,6 +22,7 @@ ratatui = "0.28"
 crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "0.16"
 futures = "0.3"
+dirs = "5.0"
 
 # Dependencies for message types
 genai-types = { path = "/Users/colinrozzi/work/genai-types" }

@@ -11,7 +11,7 @@ use theater::id::TheaterId;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{Args, CHAT_STATE_ACTOR_MANIFEST};
+use crate::config::{Args, CompatibleArgs, CHAT_STATE_ACTOR_MANIFEST};
 
 /// Chat message structure matching the chat-state actor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,7 +119,7 @@ pub struct ChatManager {
 
 impl ChatManager {
     /// Connect to Theater server
-    pub async fn connect_to_server(args: &Args) -> Result<TheaterConnection> {
+    pub async fn connect_to_server(args: &CompatibleArgs) -> Result<TheaterConnection> {
         info!("Connecting to Theater server");
         debug!("Args: {:?}", args);
 
@@ -144,7 +144,7 @@ impl ChatManager {
     /// Start the chat-state actor
     pub async fn start_actor(
         connection: &mut TheaterConnection,
-        _args: &Args,
+        _args: &CompatibleArgs,
     ) -> Result<TheaterId> {
         Self::start_actor_with_session(connection, _args, None).await
     }
@@ -152,7 +152,7 @@ impl ChatManager {
     /// Start the chat-state actor with optional session data
     pub async fn start_actor_with_session(
         connection: &mut TheaterConnection,
-        _args: &Args,
+        _args: &CompatibleArgs,
         session_data: Option<&crate::persistence::SessionData>,
     ) -> Result<TheaterId> {
         info!("Starting chat-state actor");
@@ -225,7 +225,7 @@ impl ChatManager {
     pub async fn open_channel(
         mut connection: TheaterConnection,
         actor_id: TheaterId,
-        args: &Args,
+        args: &CompatibleArgs,
     ) -> Result<Self> {
         info!("Opening channel and configuring actor");
         
@@ -329,7 +329,7 @@ impl ChatManager {
     }
 
     /// Create a new chat manager and initialize the connection (deprecated - use stepped approach)
-    pub async fn new(args: &Args) -> Result<Self> {
+    pub async fn new(args: &CompatibleArgs) -> Result<Self> {
         // Use the stepped approach internally
         let mut connection = Self::connect_to_server(args).await?;
         let actor_id = Self::start_actor(&mut connection, args).await?;

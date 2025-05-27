@@ -75,52 +75,70 @@ pub struct Args {
     #[clap(long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
     pub server: String,
 
-    /// Model to use
-    #[clap(
-        long,
-        env = "THEATER_CHAT_MODEL",
-        default_value = "gemini-2.5-flash-preview-04-17"
-    )]
-    pub model: String,
+    /// Use a specific configuration file
+    #[clap(long, value_name = "FILE")]
+    pub config: Option<std::path::PathBuf>,
 
-    /// Provider to use
-    #[clap(long, env = "THEATER_CHAT_PROVIDER", default_value = "google")]
-    pub provider: String,
-
-    /// Temperature setting (0.0 to 1.0)
-    #[clap(long, env = "THEATER_CHAT_TEMPERATURE")]
-    pub temperature: Option<f32>,
-
-    /// Maximum tokens to generate
-    #[clap(long, env = "THEATER_CHAT_MAX_TOKENS", default_value = "65535")]
-    pub max_tokens: u32,
-
-    /// System prompt
-    #[clap(long, env = "THEATER_CHAT_SYSTEM_PROMPT")]
-    pub system_prompt: Option<String>,
-
-    /// Conversation title
-    #[clap(long, env = "THEATER_CHAT_TITLE", default_value = "CLI Chat")]
-    pub title: String,
+    /// Use a named preset configuration
+    #[clap(long, value_name = "PRESET")]
+    pub preset: Option<String>,
 
     /// Debug mode to print all responses
     #[clap(long, default_value = "false")]
     pub debug: bool,
 
-    /// Path to MCP servers configuration file (JSON)
-    #[clap(long, env = "THEATER_CHAT_MCP_CONFIG")]
-    pub mcp_config: Option<String>,
-
     /// Disable session persistence (always start a new conversation)
     #[clap(long, default_value = "false")]
     pub no_session: bool,
 
-    /// Directory to store session file (defaults to current directory)
-    #[clap(long, env = "THEATER_CHAT_SESSION_DIR")]
-    pub session_dir: Option<String>,
-
     /// Clear existing session and start fresh
     #[clap(long, default_value = "false")]
+    pub clear_session: bool,
+
+    /// Subcommands for management operations
+    #[clap(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Management subcommands
+#[derive(Parser, Debug, Clone)]
+pub enum Command {
+    /// Initialize .th-chat directory structure
+    Init {
+        /// Create global configuration instead of local
+        #[clap(long)]
+        global: bool,
+    },
+    /// List available presets
+    Presets,
+    /// List current sessions
+    Sessions {
+        /// Clean old session files
+        #[clap(long)]
+        clean: bool,
+    },
+    /// Show resolved configuration
+    Config {
+        /// Show configuration for specific preset
+        #[clap(long)]
+        preset: Option<String>,
+    },
+}
+
+/// Compatibility structure that matches the old Args interface
+#[derive(Debug, Clone)]
+pub struct CompatibleArgs {
+    pub server: String,
+    pub model: String,
+    pub provider: String,
+    pub temperature: Option<f32>,
+    pub max_tokens: u32,
+    pub system_prompt: Option<String>,
+    pub title: String,
+    pub debug: bool,
+    pub mcp_config: Option<String>,
+    pub no_session: bool,
+    pub session_dir: Option<String>,
     pub clear_session: bool,
 }
 

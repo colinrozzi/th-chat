@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
-use crate::config::{Args, LoadingState, LoadingStep, StepStatus};
+use crate::config::{Args, CompatibleArgs, LoadingState, LoadingStep, StepStatus};
 use crate::ui;
 
 /// Current input mode
@@ -181,7 +181,7 @@ impl App {
         &mut self,
         terminal: &mut Terminal<B>,
         chat_manager: &mut ChatManager,
-        args: &Args,
+        args: &CompatibleArgs,
     ) -> Result<()> {
         let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
 

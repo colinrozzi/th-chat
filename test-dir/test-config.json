@@ -1,0 +1,11 @@
+{
+  "model_config": {
+    "model": "claude-3-5-sonnet-20241022",
+    "provider": "anthropic"
+  },
+  "temperature": 0.7,
+  "max_tokens": 4096,
+  "system_prompt": "You are a helpful assistant for testing.",
+  "title": "Test Configuration",
+  "mcp_servers": []
+}

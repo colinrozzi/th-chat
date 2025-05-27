@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode, NavigationMode};
-use crate::config::Args;
+use crate::config::{Args, CompatibleArgs};
 use genai_types::Message;
 
 /// Generate a preview text for a collapsed message
@@ -72,7 +72,7 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
 }
 
 /// Render the main user interface
-pub fn render(f: &mut Frame, app: &mut App, args: &Args) {
+pub fn render(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     if app.is_loading {
         render_loading_screen(f, app, args);
     } else {
@@ -81,7 +81,7 @@ pub fn render(f: &mut Frame, app: &mut App, args: &Args) {
 }
 
 /// Render the Linux boot-style loading screen
-pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &Args) {
+pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
     let area = f.area();
     
     // Clear the entire screen with black background
@@ -194,7 +194,7 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &Args) {
 }
 
 /// Render the main chat screen
-pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &Args) {
+pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     let size = f.area();
 
     // Create main layout
@@ -227,7 +227,7 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &Args) {
 }
 
 /// Render the title bar
-fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &Args) {
+fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &CompatibleArgs) {
     let title = format!("th-chat - {}", args.title);
     let title_paragraph = Paragraph::new(title)
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -576,7 +576,7 @@ fn render_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 /// Render the status bar
-fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args: &Args) {
+fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args: &CompatibleArgs) {
     let mode_text = match app.navigation_mode {
         NavigationMode::Scroll => "SCROLL",
         NavigationMode::Navigate => "NAVIGATE",
