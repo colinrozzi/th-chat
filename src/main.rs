@@ -40,6 +40,16 @@ struct ExtendedArgs {
 impl ExtendedArgs {
     /// Convert to a compatible Args structure for existing code
     pub fn to_compatible_args(&self) -> CompatibleArgs {
+        // Convert MCP servers to the old format (JSON file path)
+        // For now, we'll write the MCP config to a temporary location
+        // This maintains full compatibility with the existing chat-state actor
+        let mcp_config_path = if !self.config.mcp_servers.is_empty() {
+            // We could write to a temp file, but for now let's use None
+            // and handle MCP servers through the settings update instead
+            None
+        } else {
+            None
+        };
         CompatibleArgs {
             server: self.server.clone(),
             model: self.config.model_config.model.clone(),
@@ -49,13 +59,7 @@ impl ExtendedArgs {
             system_prompt: self.config.system_prompt.clone(),
             title: self.config.title.clone(),
             debug: self.debug,
-            mcp_config: if self.config.mcp_servers.is_empty() {
-                None
-            } else {
-                // For now, we'll handle MCP servers differently
-                // This is a placeholder for compatibility
-                None
-            },
+            mcp_config: mcp_config_path,
             no_session: self.no_session,
             session_dir: self.sessions_directory.as_ref().map(|d| d.sessions_dir.to_string_lossy().to_string()),
             clear_session: self.clear_session,
@@ -264,7 +268,7 @@ async fn run_app(
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
     
     info!("Opening channel to actor...");
-    let mut chat_manager = match chat::ChatManager::open_channel(connection, actor_id, &compat_args).await {
+    let mut chat_manager = match chat::ChatManager::open_channel_with_config(connection, actor_id, &compat_args, Some(&extended_args.config)).await {
         Ok(manager) => {
             info!("Channel opened successfully");
             app.complete_current_step();

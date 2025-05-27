@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::config::{Args, CompatibleArgs, CHAT_STATE_ACTOR_MANIFEST};
+use crate::config_manager::ConversationConfig;
 
 /// Chat message structure matching the chat-state actor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,11 +228,45 @@ impl ChatManager {
         actor_id: TheaterId,
         args: &CompatibleArgs,
     ) -> Result<Self> {
+        Self::open_channel_with_config(connection, actor_id, args, None).await
+    }
+    
+    /// Open channel with explicit configuration (for new config system)
+    pub async fn open_channel_with_config(
+        mut connection: TheaterConnection,
+        actor_id: TheaterId,
+        args: &CompatibleArgs,
+        config: Option<&crate::config_manager::ConversationConfig>,
+    ) -> Result<Self> {
         info!("Opening channel and configuring actor");
         
-        // Load MCP configuration
+        // Load MCP configuration - handle both old and new systems
         info!("Loading MCP configuration...");
-        let mcp_config = if let Some(ref config_path) = args.mcp_config {
+        let mcp_config = if let Some(conversation_config) = config {
+            // New system: MCP servers are part of the conversation config
+            info!("Using MCP servers from conversation configuration");
+            if !conversation_config.mcp_servers.is_empty() {
+                // Convert new format to old format for chat-state compatibility
+                let converted_servers: Vec<serde_json::Value> = conversation_config.mcp_servers.iter()
+                    .map(|server| {
+                        serde_json::json!({
+                            "actor_id": server.actor_id,
+                            "config": {
+                                "command": server.config.command,
+                                "args": server.config.args
+                            },
+                            "tools": server.tools
+                        })
+                    })
+                    .collect();
+                debug!("Converted MCP servers: {:?}", converted_servers);
+                Some(converted_servers)
+            } else {
+                info!("No MCP servers configured in conversation config");
+                None
+            }
+        } else if let Some(ref config_path) = args.mcp_config {
+            // Old system: Load from JSON file
             info!("Using custom MCP config path: {}", config_path);
             match read_mcp_config(config_path) {
                 Ok(config) => {
@@ -248,6 +283,7 @@ impl ChatManager {
                 }
             }
         } else {
+            // Old system: Try default file
             info!("Using default MCP config: mcp-config.json");
             match read_mcp_config("mcp-config.json") {
                 Ok(config) => {
@@ -267,20 +303,39 @@ impl ChatManager {
 
         // Configure the actor with settings
         info!("Configuring actor with settings...");
-        let settings = json!({
-            "type": "update_settings",
-            "settings": {
-                "model_config": {
-                    "model": args.model,
-                    "provider": args.provider
-                },
-                "temperature": args.temperature,
-                "max_tokens": args.max_tokens,
-                "system_prompt": args.system_prompt,
-                "title": args.title,
-                "mcp_servers": mcp_config
-            }
-        });
+        let settings = if let Some(conversation_config) = config {
+            // New system: Use the full conversation config with MCP servers
+            json!({
+                "type": "update_settings",
+                "settings": {
+                    "model_config": {
+                        "model": conversation_config.model_config.model,
+                        "provider": conversation_config.model_config.provider
+                    },
+                    "temperature": conversation_config.temperature,
+                    "max_tokens": conversation_config.max_tokens,
+                    "system_prompt": conversation_config.system_prompt,
+                    "title": conversation_config.title,
+                    "mcp_servers": mcp_config
+                }
+            })
+        } else {
+            // Old system: Use individual args fields
+            json!({
+                "type": "update_settings",
+                "settings": {
+                    "model_config": {
+                        "model": args.model,
+                        "provider": args.provider
+                    },
+                    "temperature": args.temperature,
+                    "max_tokens": args.max_tokens,
+                    "system_prompt": args.system_prompt,
+                    "title": args.title,
+                    "mcp_servers": mcp_config
+                }
+            })
+        };
         debug!("Settings payload: {:?}", settings);
 
         info!("Sending settings to actor...");
