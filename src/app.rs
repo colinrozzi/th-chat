@@ -259,13 +259,8 @@ impl App {
                         Some(Ok(event)) => {
                             if let Event::Key(key_event) = event {
                                 if let Some(message) = self.handle_key_event(key_event)? {
-                                    // Handle special commands
-                                    if message.starts_with('/') {
-                                        self.handle_command(&message[1..]);
-                                    } else {
                                         chat_manager.send_message(message.clone()).await?;
                                         chat_manager.request_generation().await?;
-                                    }
                                 }
                             }
                         }
@@ -377,95 +372,6 @@ impl App {
             },
         }
         Ok(None)
-    }
-
-    /// Handle special commands
-    fn handle_command(&mut self, command: &str) {
-        match command {
-            "/help" => {
-                self.toggle_help();
-            }
-            "/clear" => {
-                self.clear_conversation();
-                let clear_message = ChatMessage::from_message(
-                    Some(format!("system-{}", Uuid::new_v4())),
-                    None,
-                    Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text {
-                            text: "Conversation cleared".to_string(),
-                        }],
-                    },
-                );
-                self.add_message_to_chain(clear_message);
-            }
-            "/debug" => {
-                self.debug = !self.debug;
-                let status_msg = if self.debug {
-                    "Debug mode enabled"
-                } else {
-                    "Debug mode disabled"
-                };
-                let system_message = ChatMessage::from_message(
-                    None,
-                    None,
-                    Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text {
-                            text: status_msg.to_string(),
-                        }],
-                    },
-                );
-                self.add_message(system_message);
-            }
-            "/status" => {
-                let status_text = format!(
-                    "Client head: {:?}, Messages: {}, Chain length: {}",
-                    self.client_head,
-                    self.messages.len(),
-                    self.message_chain.len()
-                );
-                let status_message = ChatMessage::from_message(
-                    Some(format!("system-{}", Uuid::new_v4())),
-                    None,
-                    Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text { text: status_text }],
-                    },
-                );
-                self.add_message_to_chain(status_message);
-            }
-            "/sync" => {
-                // Add a manual sync command for debugging
-                let sync_message = ChatMessage::from_message(
-                    Some(format!("system-{}", Uuid::new_v4())),
-                    None,
-                    Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text {
-                            text: "Manual sync requested (will sync on next opportunity)"
-                                .to_string(),
-                        }],
-                    },
-                );
-                self.add_message_to_chain(sync_message);
-            }
-            _ => {
-                let error_msg = format!(
-                    "Unknown command: {}. Type /help for available commands.",
-                    command
-                );
-                let system_message = ChatMessage::from_message(
-                    None,
-                    None,
-                    Message {
-                        role: Role::System,
-                        content: vec![MessageContent::Text { text: error_msg }],
-                    },
-                );
-                self.add_message(system_message);
-            }
-        }
     }
 
     fn process_channel_message(&mut self, payload: ChatStateResponse) -> Result<()> {
@@ -658,7 +564,7 @@ impl App {
     /// Sync conversation history with the chat-state actor
     pub async fn sync_conversation_history(&mut self, chat_manager: &ChatManager) -> Result<()> {
         info!("Syncing conversation history with chat-state actor");
-        
+
         // Get the current head from the server
         let server_head = match chat_manager.get_current_head().await {
             Ok(head) => head,
@@ -667,39 +573,49 @@ impl App {
                 return Ok(()); // Don't fail the whole process
             }
         };
-        
-        info!("Server head: {:?}, Client head: {:?}", server_head, self.client_head);
-        
+
+        info!(
+            "Server head: {:?}, Client head: {:?}",
+            server_head, self.client_head
+        );
+
         // If heads match, we're already in sync
         if server_head == self.client_head {
             info!("Already in sync with server");
             return Ok(());
         }
-        
+
         // If we have no messages or heads don't match, get the full history
         if self.message_chain.is_empty() || server_head != self.client_head {
             info!("Getting full conversation history from server");
-            
+
             match chat_manager.get_history().await {
                 Ok(history) => {
                     info!("Received {} messages from history", history.len());
-                    
+
                     // Clear current state and rebuild from history
                     self.clear_conversation();
-                    
+
                     // Add all messages from history
                     for (index, message) in history.iter().enumerate() {
                         let msg_id = message.id.as_ref().map(|s| s.as_str()).unwrap_or("<no-id>");
-                        info!("Loading message {}/{}: id={}, has_content={}", 
-                             index + 1, history.len(), msg_id, 
-                             !message.as_message().content.is_empty());
+                        info!(
+                            "Loading message {}/{}: id={}, has_content={}",
+                            index + 1,
+                            history.len(),
+                            msg_id,
+                            !message.as_message().content.is_empty()
+                        );
                         self.add_message_to_chain(message.clone());
                     }
-                    
+
                     // Update our head to match the server
                     self.client_head = server_head;
-                    
-                    info!("Successfully synced {} messages from conversation history", history.len());
+
+                    info!(
+                        "Successfully synced {} messages from conversation history",
+                        history.len()
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to get conversation history: {}", e);
@@ -707,7 +623,7 @@ impl App {
                 }
             }
         }
-        
+
         Ok(())
     }
 
