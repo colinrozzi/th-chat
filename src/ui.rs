@@ -197,14 +197,23 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
 pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     let size = f.area();
 
-    // Create main layout
+    // Calculate available width for input wrapping
+    let input_available_width = (size.width.saturating_sub(4)) as usize;
+    
+    // Update cursor position calculation
+    app.calculate_cursor_position(input_available_width);
+    
+    // Calculate input area height dynamically
+    let input_height = app.get_input_height();
+    
+    // Create main layout with flexible input area
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),       // Title bar
-            Constraint::Min(1),          // Chat area
-            Constraint::Length(3),       // Input area
-            Constraint::Length(1),       // Status bar
+            Constraint::Length(1),              // Title bar
+            Constraint::Min(1),                 // Chat area (takes remaining space)
+            Constraint::Length(input_height),   // Input area (flexible)
+            Constraint::Length(1),              // Status bar
         ])
         .split(size);
 
@@ -215,7 +224,7 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     render_chat_area(f, chunks[1], app);
 
     // Input area
-    render_input_area(f, chunks[2], app);
+    render_flexible_input_area(f, chunks[2], app);
 
     // Status bar
     render_status_bar(f, chunks[3], app, args);
@@ -539,13 +548,13 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     );
 }
 
-/// Render the input area
-fn render_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+/// Render the flexible input area that expands with content
+fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let input_block = Block::default()
         .borders(Borders::ALL)
         .title(match app.input_mode {
             InputMode::Normal => "Input (Press 'i' to edit, 'q' to quit, 'h' for help)",
-            InputMode::Editing => "Input (Press Esc to stop editing, Enter to send)",
+            InputMode::Editing => "Input (Press Esc to stop editing, Enter for newline, Ctrl+Enter to send)",
         })
         .title_style(match app.input_mode {
             InputMode::Normal => Style::default(),
@@ -563,14 +572,15 @@ fn render_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             InputMode::Editing => Style::default().fg(Color::Yellow),
         })
         .block(input_block)
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false }); // Don't trim for proper multi-line handling
+
     f.render_widget(input_paragraph, area);
 
-    // Set cursor position when editing
+    // Set cursor position when editing (accounting for multi-line)
     if app.input_mode == InputMode::Editing && !app.waiting_for_response {
         f.set_cursor_position((
-            area.x + app.input_cursor_position as u16 + 1,
-            area.y + 1,
+            area.x + app.cursor_col as u16 + 1,
+            area.y + app.cursor_line as u16 + 1,
         ));
     }
 }
@@ -634,11 +644,20 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  Selected message shows with ► indicator and highlighting"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Input & General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            Span::styled("Input Mode:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         ]),
         Line::from("  i          - Enter input mode"),
-        Line::from("  Esc        - Exit input mode / close popups"),
-        Line::from("  Enter      - Send message (in input mode)"),
+        Line::from("  Esc        - Exit input mode"),
+        Line::from("  Enter      - Insert newline"),
+        Line::from("  Ctrl+Enter - Send message"),
+        Line::from("  ↑/↓        - Navigate between lines"),
+        Line::from("  Home/End   - Move to start/end of line"),
+        Line::from("  Ctrl+A     - Move to start of input"),
+        Line::from("  Ctrl+E     - Move to end of input"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]),
         Line::from("  q          - Quit application"),
         Line::from("  h / F1     - Toggle this help"),
         Line::from(""),
@@ -650,7 +669,8 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::styled("Tips:", Style::default().fg(Color::Cyan))
         ]),
-        Line::from("  Press 'v' to toggle modes • 'h' to toggle help • 'q' to quit"),
+        Line::from("  Input area expands automatically with content"),
+        Line::from("  Use Ctrl+Enter to send multi-line messages"),
         Line::from(""),
         Line::from("Press h/F1 or Esc to close this help"),
     ];
@@ -658,7 +678,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
     let help_paragraph = Paragraph::new(help_text)
         .block(
             Block::default()
-                .title("Help - Vim-Style Navigation")
+                .title("Help - Multi-line Input Support")
                 .borders(Borders::ALL)
                 .title_style(Style::default().fg(Color::Yellow))
                 .style(Style::default().bg(Color::Black).fg(Color::White)),

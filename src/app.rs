@@ -1,6 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures::stream::StreamExt;
 use futures::FutureExt;
 use genai_types::{messages::Role, Message, MessageContent};
@@ -92,6 +92,12 @@ pub struct App {
     pub show_message_selection: bool,
     /// Set of collapsed message indices
     pub collapsed_messages: std::collections::HashSet<usize>,
+    /// Number of lines in the current input text
+    pub input_lines: usize,
+    /// Which line the cursor is currently on (0-based)
+    pub cursor_line: usize,
+    /// Column position on the current line (0-based)
+    pub cursor_col: usize,
 }
 
 impl Default for App {
@@ -124,6 +130,9 @@ impl Default for App {
             selected_message_index: None,
             show_message_selection: false,
             collapsed_messages: std::collections::HashSet::new(),
+            input_lines: 1,
+            cursor_line: 0,
+            cursor_col: 0,
         }
     }
 }
@@ -347,11 +356,24 @@ impl App {
                 _ => {}
             },
             InputMode::Editing => match key_event.code {
-                KeyCode::Enter => {
+                // Ctrl+Enter to send message (instead of just Enter)
+                KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(message) = self.submit_message() {
                         self.input_mode = InputMode::Normal;
                         return Ok(Some(message));
                     }
+                }
+                // Regular Enter for newline
+                KeyCode::Enter => {
+                    self.insert_newline();
+                }
+                // Ctrl+A to move to start
+                KeyCode::Char('a') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.input_cursor_position = 0;
+                }
+                // Ctrl+E to move to end
+                KeyCode::Char('e') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.input_cursor_position = self.input.chars().count();
                 }
                 KeyCode::Char(to_insert) => {
                     self.enter_char(to_insert);
@@ -364,6 +386,23 @@ impl App {
                 }
                 KeyCode::Right => {
                     self.move_cursor_right();
+                }
+                // Add up/down arrow support for multi-line navigation
+                KeyCode::Up => {
+                    // Calculate available width (we'll improve this later)
+                    let available_width = 80;
+                    self.move_cursor_up(available_width);
+                }
+                KeyCode::Down => {
+                    let available_width = 80;
+                    self.move_cursor_down(available_width);
+                }
+                // Home/End for line navigation
+                KeyCode::Home => {
+                    self.move_cursor_to_line_start();
+                }
+                KeyCode::End => {
+                    self.move_cursor_to_line_end();
                 }
                 KeyCode::Esc => {
                     self.input_mode = InputMode::Normal;
@@ -412,6 +451,11 @@ impl App {
         let index = self.byte_index();
         self.input.insert(index, new_char);
         self.move_cursor_right();
+        
+        // Recalculate line information if we just inserted a newline
+        if new_char == '\n' {
+            self.input_lines = self.input.lines().count().max(1);
+        }
     }
 
     /// Get the byte index for the cursor position
@@ -429,10 +473,20 @@ impl App {
         if is_not_cursor_leftmost {
             let current_index = self.input_cursor_position;
             let from_left_to_current_index = current_index - 1;
+            
+            // Get the character we're about to delete
+            let chars: Vec<char> = self.input.chars().collect();
+            let deleted_char = chars.get(from_left_to_current_index).copied();
+            
             let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
             let after_char_to_delete = self.input.chars().skip(current_index);
             self.input = before_char_to_delete.chain(after_char_to_delete).collect();
             self.move_cursor_left();
+            
+            // Recalculate line information if we just deleted a newline
+            if deleted_char == Some('\n') {
+                self.input_lines = self.input.lines().count().max(1);
+            }
         }
     }
 
@@ -455,6 +509,138 @@ impl App {
         let message = self.input.clone();
         self.reset_input();
         Some(message)
+    }
+
+    /// Insert a newline character at cursor position
+    pub fn insert_newline(&mut self) {
+        self.enter_char('\n');
+    }
+
+    /// Calculate cursor position for multi-line input
+    pub fn calculate_cursor_position(&mut self, available_width: usize) {
+        if self.input.is_empty() {
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+            self.input_lines = 1;
+            return;
+        }
+
+        // Wrap the text to see how it breaks into lines
+        let wrapped = textwrap::fill(&self.input, available_width);
+        let lines: Vec<&str> = wrapped.lines().collect();
+        self.input_lines = lines.len().max(1);
+
+        // Find which character position we're at
+        let mut chars_so_far = 0;
+        let mut found_line = 0;
+        let mut found_col = 0;
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_chars = line.chars().count();
+            
+            if chars_so_far + line_chars >= self.input_cursor_position {
+                // Cursor is on this line
+                found_line = line_idx;
+                found_col = self.input_cursor_position - chars_so_far;
+                break;
+            }
+            
+            // Add line length plus newline (except for last line)
+            chars_so_far += line_chars;
+            if line_idx < lines.len() - 1 {
+                chars_so_far += 1; // for the implicit newline
+            }
+        }
+
+        self.cursor_line = found_line;
+        self.cursor_col = found_col;
+    }
+
+    /// Move cursor up one line
+    pub fn move_cursor_up(&mut self, available_width: usize) {
+        self.calculate_cursor_position(available_width);
+        
+        if self.cursor_line > 0 {
+            // Get the wrapped lines
+            let wrapped = textwrap::fill(&self.input, available_width);
+            let lines: Vec<&str> = wrapped.lines().collect();
+            
+            // Move to the previous line, trying to maintain column position
+            let target_line = self.cursor_line - 1;
+            let target_line_len = lines[target_line].chars().count();
+            let new_col = self.cursor_col.min(target_line_len);
+            
+            // Calculate the character position
+            let mut new_position = 0;
+            for i in 0..target_line {
+                new_position += lines[i].chars().count();
+                if i < lines.len() - 1 {
+                    new_position += 1; // newline
+                }
+            }
+            new_position += new_col;
+            
+            self.input_cursor_position = new_position.min(self.input.chars().count());
+        }
+    }
+
+    /// Move cursor down one line
+    pub fn move_cursor_down(&mut self, available_width: usize) {
+        self.calculate_cursor_position(available_width);
+        
+        let wrapped = textwrap::fill(&self.input, available_width);
+        let lines: Vec<&str> = wrapped.lines().collect();
+        
+        if self.cursor_line < lines.len() - 1 {
+            // Move to the next line, trying to maintain column position
+            let target_line = self.cursor_line + 1;
+            let target_line_len = lines[target_line].chars().count();
+            let new_col = self.cursor_col.min(target_line_len);
+            
+            // Calculate the character position
+            let mut new_position = 0;
+            for i in 0..target_line {
+                new_position += lines[i].chars().count();
+                if i < lines.len() - 1 {
+                    new_position += 1; // newline
+                }
+            }
+            new_position += new_col;
+            
+            self.input_cursor_position = new_position.min(self.input.chars().count());
+        }
+    }
+
+    /// Move cursor to the beginning of the current line
+    pub fn move_cursor_to_line_start(&mut self) {
+        // Find the last newline before current position
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut pos = self.input_cursor_position;
+        
+        while pos > 0 && chars[pos - 1] != '\n' {
+            pos -= 1;
+        }
+        
+        self.input_cursor_position = pos;
+    }
+
+    /// Move cursor to the end of the current line
+    pub fn move_cursor_to_line_end(&mut self) {
+        // Find the next newline after current position
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut pos = self.input_cursor_position;
+        
+        while pos < chars.len() && chars[pos] != '\n' {
+            pos += 1;
+        }
+        
+        self.input_cursor_position = pos;
+    }
+
+    /// Get the minimum height needed for the input area
+    pub fn get_input_height(&self) -> u16 {
+        // Add 2 for borders, plus at least 1 line, max reasonable height
+        (self.input_lines + 2).min(10).max(3) as u16
     }
 
     /// Sync with the chat-state actor by fetching new messages from our head to the server's head
