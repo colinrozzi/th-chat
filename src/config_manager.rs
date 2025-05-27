@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use mcp_protocol::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -6,61 +7,50 @@ use tracing::{debug, info, warn};
 
 use crate::directory::{ThChatDirectory, find_th_chat_dir, get_global_th_chat_dir};
 
-/// Full conversation settings that match the chat-state actor's ConversationSettings
+/// Full conversation settings - EXACT COPY from chat-state actor to ensure compatibility
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConversationConfig {
-    /// Model configuration
+    /// Model to use (e.g., "claude-3-7-sonnet-20250219")
     pub model_config: ModelConfig,
-    
+
     /// Temperature setting (0.0 to 1.0)
     pub temperature: Option<f32>,
-    
+
     /// Maximum tokens to generate
     pub max_tokens: u32,
-    
+
     /// System prompt to use
     pub system_prompt: Option<String>,
-    
+
     /// Title of the conversation
     pub title: String,
-    
-    /// MCP servers configuration
-    pub mcp_servers: Vec<McpServerConfig>,
+
+    /// Mcp servers
+    pub mcp_servers: Vec<McpServer>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ModelConfig {
-    /// Model name (e.g., "gemini-2.5-flash-preview-04-17")
     pub model: String,
-    
-    /// Provider name (e.g., "google", "anthropic")
     pub provider: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct McpServerConfig {
-    /// Actor ID (will be populated when server is started)
-    pub actor_id: Option<String>,
-    
-    /// Server configuration
-    pub config: McpConfig,
-    
-    /// Available tools (will be populated when server starts)
-    pub tools: Option<serde_json::Value>,
+pub struct McpConfig {
+    pub command: String,
+    pub args: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct McpConfig {
-    /// Command to execute
-    pub command: String,
-    
-    /// Command arguments
-    pub args: Vec<String>,
+pub struct McpServer {
+    pub actor_id: Option<String>,
+    pub config: McpConfig,
+    pub tools: Option<Vec<Tool>>,
 }
 
 impl Default for ConversationConfig {
     fn default() -> Self {
-        Self {
+        ConversationConfig {
             model_config: ModelConfig {
                 model: "gemini-2.5-flash-preview-04-17".to_string(),
                 provider: "google".to_string(),
@@ -292,7 +282,7 @@ impl ConfigManager {
             system_prompt: Some("You are an expert programmer. Provide clean, well-documented code with explanations. Focus on best practices and maintainable solutions.".to_string()),
             title: "Coding Session".to_string(),
             mcp_servers: vec![
-                McpServerConfig {
+                McpServer {
                     actor_id: None,
                     config: McpConfig {
                         command: "simple-fs-mcp-server".to_string(),

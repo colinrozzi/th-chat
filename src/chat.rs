@@ -242,61 +242,48 @@ impl ChatManager {
         
         // Load MCP configuration - handle both old and new systems
         info!("Loading MCP configuration...");
-        let mcp_config = if let Some(conversation_config) = config {
+        let mcp_servers = if let Some(conversation_config) = config {
             // New system: MCP servers are part of the conversation config
-            info!("Using MCP servers from conversation configuration");
-            if !conversation_config.mcp_servers.is_empty() {
-                // Convert new format to old format for chat-state compatibility
-                let converted_servers: Vec<serde_json::Value> = conversation_config.mcp_servers.iter()
-                    .map(|server| {
-                        serde_json::json!({
-                            "actor_id": server.actor_id,
-                            "config": {
-                                "command": server.config.command,
-                                "args": server.config.args
-                            },
-                            "tools": server.tools
-                        })
-                    })
-                    .collect();
-                debug!("Converted MCP servers: {:?}", converted_servers);
-                Some(converted_servers)
-            } else {
-                info!("No MCP servers configured in conversation config");
-                None
-            }
+            info!("Using MCP servers from conversation configuration ({} servers)", conversation_config.mcp_servers.len());
+            debug!("MCP servers: {:?}", conversation_config.mcp_servers);
+            conversation_config.mcp_servers.clone()
         } else if let Some(ref config_path) = args.mcp_config {
-            // Old system: Load from JSON file
+            // Old system: Load from JSON file and convert to new format
             info!("Using custom MCP config path: {}", config_path);
             match read_mcp_config(config_path) {
-                Ok(config) => {
+                Ok(legacy_config) => {
                     info!("Successfully loaded custom MCP config");
-                    debug!("MCP config: {:?}", config);
-                    Some(config)
+                    debug!("Legacy MCP config: {:?}", legacy_config);
+                    // Convert legacy format to new format if needed
+                    // For now, assume it's already in the right format
+                    serde_json::from_value(serde_json::Value::Array(legacy_config))
+                        .unwrap_or_else(|_| vec![])
                 }
                 Err(e) => {
                     warn!(
                         "Failed to load custom MCP config: {:?}, continuing without MCP",
                         e
                     );
-                    None
+                    vec![]
                 }
             }
         } else {
             // Old system: Try default file
             info!("Using default MCP config: mcp-config.json");
             match read_mcp_config("mcp-config.json") {
-                Ok(config) => {
+                Ok(legacy_config) => {
                     info!("Successfully loaded default MCP config");
-                    debug!("MCP config: {:?}", config);
-                    Some(config)
+                    debug!("Legacy MCP config: {:?}", legacy_config);
+                    // Convert legacy format to new format if needed
+                    serde_json::from_value(serde_json::Value::Array(legacy_config))
+                        .unwrap_or_else(|_| vec![])
                 }
                 Err(e) => {
                     warn!(
                         "Failed to load default MCP config: {:?}, continuing without MCP",
                         e
                     );
-                    None
+                    vec![]
                 }
             }
         };
@@ -304,19 +291,16 @@ impl ChatManager {
         // Configure the actor with settings
         info!("Configuring actor with settings...");
         let settings = if let Some(conversation_config) = config {
-            // New system: Use the full conversation config with MCP servers
+            // New system: Use the full conversation config - exact same structure as chat-state expects
             json!({
                 "type": "update_settings",
                 "settings": {
-                    "model_config": {
-                        "model": conversation_config.model_config.model,
-                        "provider": conversation_config.model_config.provider
-                    },
+                    "model_config": conversation_config.model_config,
                     "temperature": conversation_config.temperature,
                     "max_tokens": conversation_config.max_tokens,
                     "system_prompt": conversation_config.system_prompt,
                     "title": conversation_config.title,
-                    "mcp_servers": mcp_config
+                    "mcp_servers": mcp_servers
                 }
             })
         } else {
@@ -332,7 +316,7 @@ impl ChatManager {
                     "max_tokens": args.max_tokens,
                     "system_prompt": args.system_prompt,
                     "title": args.title,
-                    "mcp_servers": mcp_config
+                    "mcp_servers": mcp_servers
                 }
             })
         };
