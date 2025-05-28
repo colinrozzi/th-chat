@@ -300,8 +300,6 @@ impl App {
             return Ok(None);
         }
 
-        debug!("Key event: {:?}", key_event);
-
         // Handle help popup
         if self.show_help {
             match key_event.code {
