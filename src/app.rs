@@ -518,7 +518,7 @@ impl App {
     }
 
     /// Calculate cursor position for multi-line input
-    pub fn calculate_cursor_position(&mut self, available_width: usize) {
+    pub fn calculate_cursor_position(&mut self, _available_width: usize) {
         if self.input.is_empty() {
             self.cursor_line = 0;
             self.cursor_col = 0;
@@ -526,35 +526,28 @@ impl App {
             return;
         }
 
-        // Wrap the text to see how it breaks into lines
-        let wrapped = textwrap::fill(&self.input, available_width);
-        let lines: Vec<&str> = wrapped.lines().collect();
-        self.input_lines = lines.len().max(1);
-
-        // Find which character position we're at
-        let mut chars_so_far = 0;
-        let mut found_line = 0;
-        let mut found_col = 0;
-
+        // Count actual lines (split by \n) and find cursor position within those
+        let lines: Vec<&str> = self.input.split('\n').collect();
+        self.input_lines = lines.len();
+        
+        let mut char_count = 0;
+        
         for (line_idx, line) in lines.iter().enumerate() {
-            let line_chars = line.chars().count();
-
-            if chars_so_far + line_chars >= self.input_cursor_position {
+            let line_char_count = line.chars().count();
+            
+            if char_count + line_char_count >= self.input_cursor_position {
                 // Cursor is on this line
-                found_line = line_idx;
-                found_col = self.input_cursor_position - chars_so_far;
-                break;
+                self.cursor_line = line_idx;
+                self.cursor_col = self.input_cursor_position - char_count;
+                return;
             }
-
-            // Add line length plus newline (except for last line)
-            chars_so_far += line_chars;
-            if line_idx < lines.len() - 1 {
-                chars_so_far += 1; // for the implicit newline
-            }
+            
+            char_count += line_char_count + 1; // +1 for the \n character
         }
-
-        self.cursor_line = found_line;
-        self.cursor_col = found_col;
+        
+        // Fallback - cursor at end
+        self.cursor_line = lines.len().saturating_sub(1);
+        self.cursor_col = lines.last().map(|l| l.chars().count()).unwrap_or(0);
     }
 
     /// Move cursor up one line
@@ -562,9 +555,8 @@ impl App {
         self.calculate_cursor_position(available_width);
 
         if self.cursor_line > 0 {
-            // Get the wrapped lines
-            let wrapped = textwrap::fill(&self.input, available_width);
-            let lines: Vec<&str> = wrapped.lines().collect();
+            // Get the actual lines (split by \n)
+            let lines: Vec<&str> = self.input.split('\n').collect();
 
             // Move to the previous line, trying to maintain column position
             let target_line = self.cursor_line - 1;
@@ -574,10 +566,7 @@ impl App {
             // Calculate the character position
             let mut new_position = 0;
             for i in 0..target_line {
-                new_position += lines[i].chars().count();
-                if i < lines.len() - 1 {
-                    new_position += 1; // newline
-                }
+                new_position += lines[i].chars().count() + 1; // +1 for newline
             }
             new_position += new_col;
 
@@ -589,8 +578,7 @@ impl App {
     pub fn move_cursor_down(&mut self, available_width: usize) {
         self.calculate_cursor_position(available_width);
 
-        let wrapped = textwrap::fill(&self.input, available_width);
-        let lines: Vec<&str> = wrapped.lines().collect();
+        let lines: Vec<&str> = self.input.split('\n').collect();
 
         if self.cursor_line < lines.len() - 1 {
             // Move to the next line, trying to maintain column position
@@ -601,10 +589,7 @@ impl App {
             // Calculate the character position
             let mut new_position = 0;
             for i in 0..target_line {
-                new_position += lines[i].chars().count();
-                if i < lines.len() - 1 {
-                    new_position += 1; // newline
-                }
+                new_position += lines[i].chars().count() + 1; // +1 for newline
             }
             new_position += new_col;
 
