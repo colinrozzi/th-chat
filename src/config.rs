@@ -95,6 +95,10 @@ pub struct Args {
     #[clap(long, default_value = "false")]
     pub clear_session: bool,
 
+    /// Use specific session
+    #[clap(long, env = "TH_CHAT_SESSION")]
+    pub session: Option<String>,
+
     /// Subcommands for management operations
     #[clap(subcommand)]
     pub command: Option<Command>,
@@ -111,17 +115,68 @@ pub enum Command {
     },
     /// List available presets
     Presets,
-    /// List current sessions
+    /// Manage chat sessions
     Sessions {
-        /// Clean old session files
-        #[clap(long)]
-        clean: bool,
+        #[clap(subcommand)]
+        action: SessionAction,
     },
     /// Show resolved configuration
     Config {
         /// Show configuration for specific preset
         #[clap(long)]
         preset: Option<String>,
+    },
+}
+
+/// Session management subcommands
+#[derive(Parser, Debug, Clone)]
+pub enum SessionAction {
+    /// List all sessions
+    List {
+        /// Show detailed information
+        #[clap(long)]
+        detailed: bool,
+    },
+    /// Create new session
+    New {
+        /// Session name
+        #[clap(long)]
+        name: String,
+        /// Optional description
+        #[clap(long)]
+        description: Option<String>,
+        /// Associate with config preset
+        #[clap(long)]
+        preset: Option<String>,
+    },
+    /// Show session information
+    Info {
+        /// Session name
+        name: String,
+    },
+    /// Delete session
+    Delete {
+        /// Session name
+        name: String,
+        /// Force deletion without confirmation
+        #[clap(long)]
+        force: bool,
+    },
+    /// Rename session
+    Rename {
+        /// Current session name
+        old_name: String,
+        /// New session name
+        new_name: String,
+    },
+    /// Clean old sessions
+    Clean {
+        /// Delete sessions older than specified duration (e.g., "30d", "7d")
+        #[clap(long)]
+        older_than: Option<String>,
+        /// Show what would be deleted without actually deleting
+        #[clap(long)]
+        dry_run: bool,
     },
 }
 
