@@ -25,6 +25,7 @@ use config_manager::{ConfigManager, ConfigLoadOptions};
 use directory::{create_local_th_chat_dir, create_global_th_chat_dir};
 use persistence::{SessionData, session_exists, load_session, save_session, clear_session};
 use session_manager::{SessionManager, SessionInfo};
+use uuid;
 use config_manager::ConversationConfig;
 use directory::ThChatDirectory;
 
@@ -141,13 +142,295 @@ async fn run_app(
     mut app: App,
     args: Args,
 ) -> Result<()> {
-    // This is a simplified version - the actual implementation would be more complex
-    // For now, just show that sessions can be handled
-    info!("Session handling would be implemented here");
-    info!("Requested session: {:?}", args.session);
+    // Load configuration using new system
+    let config_manager = ConfigManager::new();
+    let config_options = ConfigLoadOptions {
+        config_file: args.config.clone(),
+        preset: args.preset.clone(),
+    };
     
-    // TODO: Implement full session handling in the main application flow
-    Ok(())
+    let (conversation_config, config_source) = config_manager.load_config(&config_options)
+        .context("Failed to load configuration")?;
+    
+    info!("Using configuration from: {}", config_source);
+    debug!("Loaded configuration: {:?}", conversation_config);
+    
+    // Set up session management
+    let sessions_dir = config_manager.get_sessions_directory()
+        .ok_or_else(|| anyhow::anyhow!("No .th-chat directory found. Run 'th-chat init' to initialize."))?
+        .sessions_dir.clone();
+    
+    let session_manager = SessionManager::new(sessions_dir)?;
+    
+    // Resolve which session to use
+    let session_name = session_manager.resolve_session_name(args.session.as_deref());
+    info!("Using session: {}", session_name);
+    
+    // Load or create session
+    let mut session_data = if session_manager.session_exists(&session_name) {
+        let mut existing_session = session_manager.load_session(&session_name)?;
+        info!("Loaded existing session '{}' - conversation_id: {}, messages: {}", 
+             existing_session.name, existing_session.conversation_id, existing_session.message_count);
+        existing_session
+    } else {
+        info!("Creating new session '{}'", session_name);
+        // We'll get the actual IDs from the chat-state actor after it starts
+        let placeholder_conversation_id = uuid::Uuid::new_v4().to_string();
+        let placeholder_store_id = uuid::Uuid::new_v4().to_string();
+        
+        let mut new_session = session_manager::SessionData::new(
+            session_name.clone(),
+            placeholder_conversation_id,
+            placeholder_store_id,
+        );
+        
+        // Associate with preset if one was used in config loading
+        if let Some(preset_name) = &args.preset {
+            new_session = new_session.with_preset(preset_name.clone());
+        }
+        
+        new_session
+    };
+    
+    // Create an extended args struct with the loaded configuration
+    let extended_args = ExtendedArgs {
+        server: args.server.clone(),
+        debug: args.debug,
+        no_session: args.no_session,
+        clear_session: args.clear_session,
+        session: Some(session_name.clone()),
+        config: conversation_config,
+        sessions_directory: config_manager.get_sessions_directory().cloned(),
+    };
+    
+    // Convert to compatible format for existing code
+    let compat_args = extended_args.to_compatible_args();
+    info!("Starting run_app with server: {}", compat_args.server);
+
+    // Handle session clearing if requested
+    if compat_args.clear_session {
+        info!("Clearing session '{}'", session_name);
+        if session_manager.session_exists(&session_name) && session_name != SessionManager::default_session_name() {
+            session_manager.delete_session(&session_name)?;
+            info!("Session '{}' cleared successfully", session_name);
+            
+            // Create a new session
+            let new_conversation_id = uuid::Uuid::new_v4().to_string();
+            let new_store_id = uuid::Uuid::new_v4().to_string();
+            session_data = session_manager::SessionData::new(
+                session_name.clone(),
+                new_conversation_id,
+                new_store_id,
+            );
+        }
+    }
+
+    // Initialize loading steps
+    app.initialize_loading_steps();
+
+    // Step 0: Initialize
+    let init_message = if session_manager.session_exists(&session_name) && !compat_args.clear_session {
+        format!("Resuming session '{}'...", session_name)
+    } else {
+        format!("Initializing new session '{}'...", session_name)
+    };
+    app.start_loading_step(0, Some(init_message));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    // Small delay to show the initialization step
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    app.complete_current_step();
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+
+    // Step 1: Connect to server
+    app.start_loading_step(1, Some(format!("Connecting to Theater server at {}", args.server)));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    info!("Connecting to Theater server...");
+    let mut connection = match chat::ChatManager::connect_to_server(&compat_args).await {
+        Ok(conn) => {
+            info!("Connected to Theater server successfully");
+            app.complete_current_step();
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            conn
+        }
+        Err(e) => {
+            error!("Failed to connect to server: {:?}", e);
+            app.fail_current_step(format!("Connection failed: {}", e));
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            
+            // Give user time to see the error
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            return Err(e);
+        }
+    };
+
+    // Step 2: Start actor
+    app.start_loading_step(2, Some(format!("Starting chat-state actor for session '{}'...", session_name)));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    info!("Starting chat-state actor...");
+    let actor_id = match chat::ChatManager::start_actor_with_session(
+        &mut connection, 
+        &compat_args, 
+        Some(&session_data.to_persistence_session_data())
+    ).await {
+        Ok(id) => {
+            info!("Actor started successfully: {:?}", id);
+            app.complete_current_step();
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            id
+        }
+        Err(e) => {
+            error!("Failed to start actor: {:?}", e);
+            app.fail_current_step(format!("Actor initialization failed: {}", e));
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            return Err(e);
+        }
+    };
+
+    // Step 3: Open channel
+    app.start_loading_step(3, Some(format!("Opening channel to actor {}", &actor_id.to_string()[..8])));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    info!("Opening channel to actor...");
+    let mut chat_manager = match chat::ChatManager::open_channel_with_config(
+        connection, 
+        actor_id, 
+        &compat_args, 
+        Some(&extended_args.config)
+    ).await {
+        Ok(manager) => {
+            info!("Channel opened successfully");
+            app.complete_current_step();
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            manager
+        }
+        Err(e) => {
+            error!("Failed to open channel: {:?}", e);
+            app.fail_current_step(format!("Channel setup failed: {}", e));
+            terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+            
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            return Err(e);
+        }
+    };
+
+    // Step 4: Get actual conversation metadata and update session
+    app.start_loading_step(4, Some("Retrieving conversation metadata...".to_string()));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    match chat_manager.get_metadata().await {
+        Ok((conversation_id, store_id)) => {
+            // Update session with actual IDs from the actor
+            session_data.conversation_id = conversation_id;
+            session_data.store_id = store_id;
+            session_data.update_access_time();
+            
+            // Save the updated session
+            session_manager.save_session(&session_data)?;
+            
+            info!("Session metadata updated and saved");
+            app.complete_current_step();
+        }
+        Err(e) => {
+            warn!("Failed to get metadata for session: {}", e);
+            app.fail_current_step(format!("Metadata retrieval failed: {}", e));
+        }
+    }
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+    // Step 5: Sync conversation history (if existing session)
+    if session_manager.session_exists(&session_name) && !compat_args.clear_session {
+        app.start_loading_step(5, Some("Syncing conversation history...".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+        
+        match app.sync_conversation_history(&chat_manager).await {
+            Ok(_) => {
+                info!("Conversation history synced successfully");
+                app.complete_current_step();
+            }
+            Err(e) => {
+                warn!("Failed to sync conversation history: {}", e);
+                app.fail_current_step(format!("History sync failed: {}", e));
+            }
+        }
+        terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    } else {
+        // Skip history sync for new sessions
+        app.start_loading_step(5, Some("Skipping history sync (new session)".to_string()));
+        terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        app.complete_current_step();
+        terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    }
+
+    // Step 6: Prepare chat interface
+    app.start_loading_step(6, Some("Preparing chat interface...".to_string()));
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+    
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    app.complete_current_step();
+    terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
+
+    // Final boot completion message
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    
+    // Finish loading
+    app.finish_loading();
+    info!("Application ready for session '{}'", session_name);
+
+    // Start main application loop with session context
+    info!("Starting main application loop");
+    let result = run_chat_session(
+        terminal, 
+        &mut app, 
+        &mut chat_manager, 
+        &compat_args,
+        &session_manager,
+        &mut session_data
+    ).await;
+
+    match &result {
+        Ok(_) => info!("Application loop completed successfully"),
+        Err(e) => error!("Application loop failed: {:?}", e),
+    }
+
+    result
+}
+
+/// Main chat session loop with session awareness
+async fn run_chat_session(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    chat_manager: &mut chat::ChatManager,
+    args: &CompatibleArgs,
+    session_manager: &SessionManager,
+    session_data: &mut session_manager::SessionData,
+) -> Result<()> {
+    info!("Starting chat session loop for '{}'", session_data.name);
+    
+    // Enhanced app.run that includes session management
+    let result = app.run_with_session_context(
+        terminal,
+        chat_manager,
+        args,
+        session_manager,
+        session_data,
+    ).await;
+    
+    // Save final session state before exiting
+    if let Err(e) = session_manager.save_session(session_data) {
+        warn!("Failed to save final session state: {}", e);
+    } else {
+        info!("Final session state saved for '{}'", session_data.name);
+    }
+    
+    result
 }
 
 /// Handle session management commands

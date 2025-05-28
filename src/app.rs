@@ -1191,4 +1191,170 @@ impl App {
     pub fn is_message_collapsed(&self, index: usize) -> bool {
         self.collapsed_messages.contains(&index)
     }
+
+    /// Initialize loading steps for session-aware loading
+    pub fn initialize_loading_steps(&mut self) {
+        self.loading_steps = vec![
+            LoadingStep {
+                message: "Initializing session".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Connecting to Theater server".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Starting chat-state actor".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Opening communication channel".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Retrieving conversation metadata".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Syncing conversation history".to_string(),
+                status: StepStatus::Pending,
+            },
+            LoadingStep {
+                message: "Preparing chat interface".to_string(),
+                status: StepStatus::Pending,
+            },
+        ];
+        self.current_step_index = 0;
+        self.is_loading = true;
+    }
+
+    /// Main application loop with session context
+    pub async fn run_with_session_context<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        chat_manager: &mut crate::chat::ChatManager,
+        args: &CompatibleArgs,
+        session_manager: &crate::session_manager::SessionManager,
+        session_data: &mut crate::session_manager::SessionData,
+    ) -> Result<()> {
+        info!("Starting session-aware chat loop for '{}'", session_data.name);
+        
+        let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
+        let mut connection = TheaterConnection::new(server_addr);
+        
+        // Send the initial messages to the server to listen for head and message updates
+        let message = ManagementCommand::OpenChannel {
+            actor_id: ChannelParticipant::Actor(
+                TheaterId::parse(&chat_manager.actor_id).expect("Invalid actor ID"),
+            ),
+            initial_message: vec![],
+        };
+
+        info!("Sending initial message to server: {:?}", message);
+        connection
+            .send(message)
+            .await
+            .context("Failed to send initial message to Theater server")?;
+
+        self.connection_status = format!("Connected to {} (Session: {})", server_addr, session_data.name);
+
+        let mut reader = EventStream::new();
+        let mut message_count = session_data.message_count;
+
+        loop {
+            // Update animations
+            self.update_thinking_animation();
+            if self.is_loading {
+                self.update_boot_animation();
+            }
+
+            terminal.draw(|f| crate::ui::render(f, self, args))?;
+
+            if self.should_quit {
+                break;
+            }
+            
+            let input_event = reader.next().fuse();
+            tokio::select! {
+                msg = connection.receive().fuse() => {
+                    info!("Received message from server: {:?}", msg);
+
+                    match msg {
+                        Ok(ManagementResponse::ChannelMessage { channel_id, sender_id: _, message }) => {
+                            info!("Received message from channel {}: {:?}", channel_id, message);
+                            if let Ok(payload) = serde_json::from_slice::<crate::chat::ChatStateResponse>(&message) {
+                                // Check if it's a ChatMessage before processing
+                                let is_chat_message = matches!(payload, crate::chat::ChatStateResponse::ChatMessage { .. });
+                                
+                                let _ = self.process_channel_message(payload);
+                                
+                                // Update session metadata when we get new messages
+                                if is_chat_message {
+                                    message_count += 1;
+                                    session_data.message_count = message_count;
+                                    session_data.update_access_time();
+                                    
+                                    // Periodically save session state
+                                    if message_count % 5 == 0 {
+                                        if let Err(e) = session_manager.save_session(session_data) {
+                                            warn!("Failed to save session state: {}", e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                error!("Failed to parse message payload");
+                            }
+                        }
+                        Ok(ManagementResponse::ChannelOpened { channel_id, .. }) => {
+                            info!("Channel opened: {}", channel_id);
+                        }
+                        Ok(ManagementResponse::ChannelClosed { .. }) => {
+                            info!("Channel closed by server");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Error receiving message: {:?}", e);
+                            break;
+                        }
+                        _ => {
+                            error!("Unexpected message type {}", msg.unwrap_err());
+                            break;
+                        }
+                    }
+                }
+
+                event = input_event => {
+                    match event {
+                        Some(Ok(event)) => {
+                            if let Event::Key(key_event) = event {
+                                if let Some(message) = self.handle_key_event(key_event)? {
+                                    chat_manager.send_message(message.clone()).await?;
+                                    chat_manager.request_generation().await?;
+                                    
+                                    // Update session metadata for sent messages
+                                    session_data.update_access_time();
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            error!("Error reading event: {:?}", e);
+                        }
+                        None => {
+                            // Stream closed
+                            error!("Event stream closed");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update final session state
+        session_data.message_count = message_count;
+        session_data.update_access_time();
+        
+        // Cleanup
+        chat_manager.cleanup().await?;
+        Ok(())
+    }
 }

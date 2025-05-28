@@ -57,6 +57,16 @@ impl SessionData {
         self.message_count += 1;
         self.update_access_time();
     }
+
+    /// Convert to persistence::SessionData for compatibility with ChatManager
+    pub fn to_persistence_session_data(&self) -> crate::persistence::SessionData {
+        crate::persistence::SessionData {
+            conversation_id: self.conversation_id.clone(),
+            store_id: self.store_id.clone(),
+            created_at: self.created_at,
+            last_accessed: self.last_accessed,
+        }
+    }
 }
 
 /// Session information for listing and display
