@@ -399,16 +399,31 @@ impl SessionManager {
         }
     }
 
-    /// Find the next available auto-incremented session name (session-1, session-2, etc.)
+    /// Find the next auto-incremented session name based on session count
+    /// Simply counts existing session files and adds 1
     pub fn next_auto_session_name(&self) -> String {
-        let mut counter = 1;
-        loop {
-            let session_name = format!("session-{}", counter);
-            if !self.session_exists(&session_name) {
-                return session_name;
+        let session_count = self.count_session_files().unwrap_or(0);
+        let next_number = session_count + 1;
+        format!("session-{}", next_number)
+    }
+
+    /// Count the number of session files in the sessions directory
+    fn count_session_files(&self) -> Result<usize> {
+        let entries = std::fs::read_dir(&self.sessions_dir)
+            .with_context(|| format!("Failed to read sessions directory: {}", self.sessions_dir.display()))?;
+        
+        let mut count = 0;
+        for entry in entries {
+            if let Ok(entry) = entry {
+                if let Some(extension) = entry.path().extension() {
+                    if extension == "json" {
+                        count += 1;
+                    }
+                }
             }
-            counter += 1;
         }
+        
+        Ok(count)
     }
 
     /// Resolve session name with explicit default option

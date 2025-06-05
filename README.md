@@ -33,12 +33,17 @@ Simply run the command:
 th-chat
 ```
 
+**Note**: By default, th-chat now creates new auto-incremented sessions (session-1, session-2, etc.) instead of reusing the "default" session. Use `--use-default-session` to get the old behavior.
+
 ### Command Line Options
 
 - `--server`: Address of the Theater server (default: 127.0.0.1:9000)
-- `--model`: AI model to use (default: claude-3-5-sonnet-20240307)
-- `--provider`: Provider to use (default: anthropic)
-- `--system-prompt`: Custom system prompt to use
+- `--session`: Use a specific session name
+- `--use-default-session`: Use the "default" session (old behavior)
+- `--config`: Use a specific configuration file
+- `--preset`: Use a named preset configuration
+- `--debug`: Enable debug mode
+- `--clear-session`: Clear existing session and start fresh
 
 ### Special Commands
 
