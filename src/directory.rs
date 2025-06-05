@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::fs;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Standard .th-chat directory name
 pub const TH_CHAT_DIR: &str = ".th-chat";

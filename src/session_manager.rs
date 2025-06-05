@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 /// Enhanced session data with metadata and naming support
@@ -123,7 +123,7 @@ impl SessionManager {
             info!("Created sessions directory: {}", sessions_dir.display());
         }
 
-        let mut manager = Self {
+        let manager = Self {
             sessions_dir,
             current_session_name: None,
         };

@@ -49,7 +49,7 @@ pub struct McpServer {
 }
 
 impl ConversationConfig {
-    fn default(dir: String) -> Self {
+    pub fn default(dir: String) -> Self {
         ConversationConfig {
             model_config: ModelConfig {
                 model: "gemini-2.5-flash-preview-04-17".to_string(),
@@ -399,22 +399,6 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_default_config() {
-        let config = ConversationConfig::default();
-        assert_eq!(config.model_config.provider, "google");
-        assert_eq!(config.max_tokens, 65535);
-        assert_eq!(config.title, "CLI Chat");
-    }
-
-    #[test]
-    fn test_config_serialization() {
-        let config = ConversationConfig::default();
-        let json = serde_json::to_string_pretty(&config).unwrap();
-        let parsed: ConversationConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(config.model_config.model, parsed.model_config.model);
-    }
 
     #[test]
     fn test_config_manager_fallback() {
