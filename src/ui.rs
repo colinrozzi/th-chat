@@ -387,10 +387,10 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     
     for (msg_index, chat_msg) in app.messages.iter().enumerate() {
         let message = chat_msg.as_message();
-        let (prefix, mut role_style) = match message.role {
-            Role::User => ("You:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Role::Assistant => ("Assistant:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Role::System => ("System:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        let mut role_style = match message.role {
+            Role::User => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Role::Assistant => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+            Role::System => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         };
         
         // Highlight selected message
@@ -399,21 +399,19 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
             role_style = role_style.bg(Color::White).fg(Color::Black);
         }
         
-        // Add role header with completion info if available
-        let header_text = if let Some(completion) = chat_msg.as_completion() {
-            format!("{} [{}]", prefix, completion.model)
-        } else {
-            prefix.to_string()
-        };
+        // Create a simple header without role prefix or model info
+        let header_text = "".to_string();
         
-        // Add message selection indicator
-        let header_with_indicator = if is_selected {
-            format!("► {}", header_text)
-        } else {
-            format!("  {}", header_text)
-        };
-        
-        all_items.push(ListItem::new(Line::from(Span::styled(header_with_indicator, role_style))));
+        // Add message selection indicator (only for non-empty headers)
+        if !header_text.is_empty() {
+            let header_with_indicator = if is_selected {
+                format!("► {}", header_text)
+            } else {
+                format!("  {}", header_text)
+            };
+            
+            all_items.push(ListItem::new(Line::from(Span::styled(header_with_indicator, role_style))));
+        }
         
         // Process each content item in the message
         let is_collapsed = app.is_message_collapsed(msg_index);
@@ -477,11 +475,12 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
             }
         }
         
-        // Add token usage info for completions (only for non-collapsed messages)
+        // Add model and token usage info for completions (only for non-collapsed messages)
         if !is_collapsed {
             if let Some(completion) = chat_msg.as_completion() {
                 let usage_text = format!(
-                    "  Tokens: {} in, {} out | Stop: {:?}",
+                    "  {} | Tokens: {} in, {} out | Stop: {:?}",
+                    completion.model,
                     completion.usage.input_tokens,
                     completion.usage.output_tokens,
                     completion.stop_reason
