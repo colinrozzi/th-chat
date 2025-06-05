@@ -101,6 +101,34 @@ fn setup_logging() -> Result<()> {
     Ok(())
 }
 
+/// Auto-initialize .th-chat directory if it doesn't exist
+/// This provides a seamless first-run experience
+async fn auto_initialize_th_chat() -> Result<ThChatDirectory> {
+    info!("Auto-initializing .th-chat directory for first-time setup");
+    
+    // Try local directory first, then fall back to global
+    let directory = match create_local_th_chat_dir() {
+        Ok(dir) => {
+            info!("Created local .th-chat directory at: {}", dir.root.display());
+            dir
+        }
+        Err(_) => {
+            info!("Local directory creation failed, trying global directory");
+            create_global_th_chat_dir()
+                .context("Failed to create both local and global .th-chat directories")?        
+        }
+    };
+    
+    // Initialize with default configuration
+    let config_manager = ConfigManager::new();
+    config_manager.create_default_config(&directory)
+        .context("Failed to create default configuration")?;
+    
+    info!("✅ Auto-initialization complete! Created directories and default configuration.");
+    
+    Ok(directory)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging first
@@ -156,10 +184,19 @@ async fn run_app(
     info!("Using configuration from: {}", config_source);
     debug!("Loaded configuration: {:?}", conversation_config);
     
-    // Set up session management
-    let sessions_dir = config_manager.get_sessions_directory()
-        .ok_or_else(|| anyhow::anyhow!("No .th-chat directory found. Run 'th-chat init' to initialize."))?
-        .sessions_dir.clone();
+    // Set up session management (auto-initialize if needed)
+    let sessions_dir = match config_manager.get_sessions_directory() {
+        Some(dir) => dir.sessions_dir.clone(),
+        None => {
+            info!("No .th-chat directory found, auto-initializing...");
+            let _directory = auto_initialize_th_chat().await
+                .context("Failed to auto-initialize .th-chat directory")?;
+            let config_manager = ConfigManager::new(); // Refresh after initialization
+            config_manager.get_sessions_directory()
+                .context("Failed to find sessions directory after initialization")?
+                .sessions_dir.clone()
+        }
+    };
     
     let session_manager = SessionManager::new(sessions_dir)?;
     
@@ -444,8 +481,13 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
     let sessions_dir = match config_manager.get_sessions_directory() {
         Some(dir) => dir.sessions_dir.clone(),
         None => {
-            println!("No .th-chat directory found. Run 'th-chat init' to initialize.");
-            return Ok(());
+            info!("No .th-chat directory found for session command, auto-initializing...");
+            let _directory = auto_initialize_th_chat().await
+                .context("Failed to auto-initialize .th-chat directory")?;
+            let config_manager = ConfigManager::new(); // Refresh after initialization
+            config_manager.get_sessions_directory()
+                .context("Failed to find sessions directory after initialization")?
+                .sessions_dir.clone()
         }
     };
     

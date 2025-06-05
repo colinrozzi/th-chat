@@ -25,6 +25,8 @@ cargo build --release
 ln -s $(pwd)/target/release/th-chat /usr/local/bin/th-chat
 ```
 
+**No additional setup required!** The first time you run `th-chat`, it will automatically create the necessary configuration directories and files.
+
 ## Usage
 
 Simply run the command:
@@ -33,7 +35,12 @@ Simply run the command:
 th-chat
 ```
 
-**Note**: By default, th-chat now creates new auto-incremented sessions (session-1, session-2, etc.) instead of reusing the "default" session. Use `--use-default-session` to get the old behavior.
+**That's it!** th-chat will automatically:
+- Initialize the `.th-chat` directory on first run (no setup required)
+- Create a new auto-incremented session (session-1, session-2, etc.)
+- Connect to your Theater server and start chatting
+
+Use `--use-default-session` if you prefer the old "default" session behavior.
 
 ### Command Line Options
 
