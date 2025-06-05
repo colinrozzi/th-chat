@@ -417,58 +417,69 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         let is_collapsed = app.is_message_collapsed(msg_index);
         
         if is_collapsed {
-            // Show collapsed message as a single line with preview
+            // Show collapsed message as a single line with preview and left border
             let preview_text = get_message_preview(&message, 60);
-            let collapse_indicator = if is_selected {
-                "  [COLLAPSED] "
-            } else {
-                "  [COLLAPSED] "
+            let border_char = match message.role {
+                Role::User => "│",
+                Role::Assistant => "│",
+                Role::System => "│",
+            };
+            let border_color = match message.role {
+                Role::User => Color::Green,
+                Role::Assistant => Color::Blue,
+                Role::System => Color::Yellow,
             };
             
             let collapsed_line = if is_selected {
                 Line::from(vec![
-                    Span::styled(
-                        format!("{}{}", collapse_indicator, preview_text),
-                        Style::default().fg(Color::DarkGray).bg(Color::DarkGray)
-                    )
+                    Span::styled(border_char, Style::default().fg(border_color).bg(Color::DarkGray)),
+                    Span::styled(" [COLLAPSED] ", Style::default().fg(Color::DarkGray).bg(Color::DarkGray)),
+                    Span::styled(preview_text, Style::default().fg(Color::DarkGray).bg(Color::DarkGray))
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled(
-                        collapse_indicator,
-                        Style::default().fg(Color::DarkGray)
-                    ),
-                    Span::styled(
-                        preview_text,
-                        Style::default().fg(Color::Gray)
-                    )
+                    Span::styled(border_char, Style::default().fg(border_color)),
+                    Span::styled(" [COLLAPSED] ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(preview_text, Style::default().fg(Color::Gray))
                 ])
             };
             all_items.push(ListItem::new(collapsed_line));
         } else {
-            // Show full message content
+            // Show full message content with left border
+            let border_char = match message.role {
+                Role::User => "│",
+                Role::Assistant => "│",
+                Role::System => "│",
+            };
+            let border_color = match message.role {
+                Role::User => Color::Green,
+                Role::Assistant => Color::Blue,
+                Role::System => Color::Yellow,
+            };
+            
             for content in &message.content {
                 let content_lines = format_message_content(content, available_width);
                 for line in content_lines {
                     // Apply background highlighting to selected message content
                     let styled_line = if is_selected {
-                        Line::from(
+                        Line::from(vec![
+                            Span::styled(border_char, Style::default().fg(border_color).bg(Color::DarkGray)),
+                            Span::styled(" ", Style::default().bg(Color::DarkGray)),
+                        ].into_iter().chain(
                             line.spans.into_iter()
                                 .map(|span| Span::styled(
-                                    format!("  {}", span.content),
+                                    span.content,
                                     span.style.bg(Color::DarkGray)
                                 ))
-                                .collect::<Vec<_>>()
-                        )
+                        ).collect::<Vec<_>>())
                     } else {
-                        Line::from(
+                        Line::from(vec![
+                            Span::styled(border_char, Style::default().fg(border_color)),
+                            Span::styled(" ", Style::default()),
+                        ].into_iter().chain(
                             line.spans.into_iter()
-                                .map(|span| Span::styled(
-                                    format!("  {}", span.content),
-                                    span.style
-                                ))
-                                .collect::<Vec<_>>()
-                        )
+                                .map(|span| span)
+                        ).collect::<Vec<_>>())
                     };
                     all_items.push(ListItem::new(styled_line));
                 }
@@ -479,7 +490,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         if !is_collapsed {
             if let Some(completion) = chat_msg.as_completion() {
                 let usage_text = format!(
-                    "  {} | Tokens: {} in, {} out | Stop: {:?}",
+                    "{} | Tokens: {} in, {} out | Stop: {:?}",
                     completion.model,
                     completion.usage.input_tokens,
                     completion.usage.output_tokens,
@@ -490,7 +501,29 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                all_items.push(ListItem::new(Line::from(Span::styled(usage_text, usage_style))));
+                
+                // Define border char and color for metadata line
+                let border_char = match message.role {
+                    Role::User => "│",
+                    Role::Assistant => "│",
+                    Role::System => "│",
+                };
+                let border_color = match message.role {
+                    Role::User => Color::Green,
+                    Role::Assistant => Color::Blue,
+                    Role::System => Color::Yellow,
+                };
+                let border_style = if is_selected {
+                    Style::default().fg(border_color).bg(Color::DarkGray)
+                } else {
+                    Style::default().fg(border_color)
+                };
+                
+                all_items.push(ListItem::new(Line::from(vec![
+                    Span::styled(border_char, border_style),
+                    Span::styled(" ", usage_style),
+                    Span::styled(usage_text, usage_style)
+                ])));
             }
         }
         
