@@ -7,3 +7,4 @@ Cargo.lock
 *.swo
 /logs
 .th-chat
+.opencode/
