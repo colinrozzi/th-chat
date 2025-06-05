@@ -338,6 +338,10 @@ impl ConfigManager {
 
     /// Create example preset files
     fn create_example_presets(&self, directory: &ThChatDirectory) -> Result<()> {
+        let project_dir = std::env::current_dir()
+            .map_err(|e| anyhow::anyhow!("Failed to get current directory: {}", e))?
+            .to_string_lossy()
+            .to_string();
         // Coding preset
         let coding_preset = ConversationConfig {
             model_config: ModelConfig {
@@ -352,8 +356,8 @@ impl ConfigManager {
                 McpServer {
                     actor_id: None,
                     config: McpConfig {
-                        command: "/Users/colinrozzi/work/mcp-servers/simple-fs-mcp/target/release/simple-fs-mcp-server".to_string(),
-                        args: vec!["--allowed-dirs".to_string(), ".".to_string()],
+                        command: "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server".to_string(),
+                        args: vec!["--allowed-dirs".to_string(), project_dir.clone()],
                     },
                     tools: None,
                 }
@@ -373,7 +377,16 @@ impl ConfigManager {
             max_tokens: 65535,
             system_prompt: Some("You are a research assistant. Provide thorough analysis with multiple perspectives. When possible, suggest sources for further reading.".to_string()),
             title: "Research Session".to_string(),
-            mcp_servers: vec![],
+            mcp_servers: vec![
+                McpServer {
+                    actor_id: None,
+                    config: McpConfig {
+                        command: "/Users/colinrozzi/work/mcp-servers/simple-fs-mcp/target/release/simple-fs-mcp-server".to_string(),
+                        args: vec!["--allowed-dirs".to_string(), project_dir],
+                    },
+                    tools: None,
+                }
+            ],
         };
 
         let research_json = serde_json::to_string_pretty(&research_preset)?;
@@ -397,7 +410,7 @@ pub struct ConfigLoadOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use tempfile::TempDir;
 
     #[test]
