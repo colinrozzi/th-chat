@@ -99,6 +99,10 @@ pub struct Args {
     #[clap(long, env = "TH_CHAT_SESSION")]
     pub session: Option<String>,
 
+    /// Use the default session instead of creating a new auto-incremented session
+    #[clap(long, default_value = "false")]
+    pub use_default_session: bool,
+
     /// Subcommands for management operations
     #[clap(subcommand)]
     pub command: Option<Command>,

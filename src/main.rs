@@ -37,6 +37,7 @@ struct ExtendedArgs {
     pub no_session: bool,
     pub clear_session: bool,
     pub session: Option<String>,
+    pub use_default_session: bool,
     pub config: ConversationConfig,
     pub sessions_directory: Option<ThChatDirectory>,
 }
@@ -163,7 +164,10 @@ async fn run_app(
     let session_manager = SessionManager::new(sessions_dir)?;
     
     // Resolve which session to use
-    let session_name = session_manager.resolve_session_name(args.session.as_deref());
+    let session_name = session_manager.resolve_session_name_with_default(
+        args.session.as_deref(), 
+        args.use_default_session
+    );
     info!("Using session: {}", session_name);
     
     // Load or create session
@@ -199,6 +203,7 @@ async fn run_app(
         no_session: args.no_session,
         clear_session: args.clear_session,
         session: Some(session_name.clone()),
+        use_default_session: args.use_default_session,
         config: conversation_config,
         sessions_directory: config_manager.get_sessions_directory().cloned(),
     };

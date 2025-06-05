@@ -380,16 +380,56 @@ impl SessionManager {
     }
 
     /// Get the session to use based on preferences
+    /// By default, creates a new auto-incremented session (session-1, session-2, etc.)
     pub fn resolve_session_name(&self, requested_name: Option<&str>) -> String {
-        if let Some(name) = requested_name {
-            if self.session_exists(name) {
-                return name.to_string();
-            } else {
-                warn!("Requested session '{}' does not exist, using default", name);
+        match requested_name {
+            Some(name) => {
+                if self.session_exists(name) {
+                    name.to_string()
+                } else {
+                    // If explicitly requested session doesn't exist, still use that name
+                    // (it will be created as a new session)
+                    name.to_string()
+                }
+            }
+            None => {
+                // Default behavior: create new auto-incremented session
+                self.next_auto_session_name()
             }
         }
+    }
 
-        Self::default_session_name().to_string()
+    /// Find the next available auto-incremented session name (session-1, session-2, etc.)
+    pub fn next_auto_session_name(&self) -> String {
+        let mut counter = 1;
+        loop {
+            let session_name = format!("session-{}", counter);
+            if !self.session_exists(&session_name) {
+                return session_name;
+            }
+            counter += 1;
+        }
+    }
+
+    /// Resolve session name with explicit default option
+    /// Use this when you want to explicitly use the default session
+    pub fn resolve_session_name_with_default(&self, requested_name: Option<&str>, use_default: bool) -> String {
+        match requested_name {
+            Some(name) => {
+                if self.session_exists(name) {
+                    name.to_string()
+                } else {
+                    name.to_string()
+                }
+            }
+            None => {
+                if use_default {
+                    Self::default_session_name().to_string()
+                } else {
+                    self.next_auto_session_name()
+                }
+            }
+        }
     }
 
     /// Update session metadata (message count, access time)
