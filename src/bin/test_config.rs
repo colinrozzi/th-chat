@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 // Import the modules we created
-use th_chat::config_manager::{ConfigLoadOptions, ConfigManager, ConversationConfig};
-use th_chat::directory::{create_local_th_chat_dir, ThChatDirectory};
+use th_chat::config_manager::{ConfigLoadOptions, ConfigManager};
+use th_chat::directory::create_local_th_chat_dir;
 
 #[tokio::main]
 async fn main() -> Result<()> {

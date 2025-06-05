@@ -20,12 +20,11 @@ mod session_manager;
 mod ui;
 
 use app::App;
-use config::{Args, Command, CompatibleArgs, SessionAction, CHAT_STATE_ACTOR_MANIFEST};
+use config::{Args, Command, CompatibleArgs, SessionAction};
 use config_manager::ConversationConfig;
 use config_manager::{ConfigLoadOptions, ConfigManager};
 use directory::ThChatDirectory;
 use directory::{create_global_th_chat_dir, create_local_th_chat_dir};
-use persistence::{clear_session, load_session, save_session, session_exists, SessionData};
 use session_manager::{SessionInfo, SessionManager};
 use uuid;
 
@@ -218,7 +217,7 @@ async fn run_app(
 
     // Load or create session
     let mut session_data = if session_manager.session_exists(&session_name) {
-        let mut existing_session = session_manager.load_session(&session_name)?;
+        let existing_session = session_manager.load_session(&session_name)?;
         info!(
             "Loaded existing session '{}' - conversation_id: {}, messages: {}",
             existing_session.name, existing_session.conversation_id, existing_session.message_count

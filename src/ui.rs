@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode, NavigationMode};
-use crate::config::{Args, CompatibleArgs};
+use crate::config::CompatibleArgs;
 use genai_types::Message;
 
 /// Generate a preview text for a collapsed message

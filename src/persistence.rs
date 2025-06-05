@@ -126,7 +126,7 @@ pub fn update_session_access_time(working_dir: Option<&Path>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    
     use tempfile::tempdir;
 
     #[test]

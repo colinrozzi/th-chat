@@ -11,8 +11,7 @@ use theater::id::TheaterId;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{Args, CompatibleArgs, CHAT_STATE_ACTOR_MANIFEST};
-use crate::config_manager::ConversationConfig;
+use crate::config::{CompatibleArgs, CHAT_STATE_ACTOR_MANIFEST};
 
 /// Chat message structure matching the chat-state actor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,7 +223,7 @@ impl ChatManager {
 
     /// Open channel and finalize ChatManager creation
     pub async fn open_channel(
-        mut connection: TheaterConnection,
+        connection: TheaterConnection,
         actor_id: TheaterId,
         args: &CompatibleArgs,
     ) -> Result<Self> {

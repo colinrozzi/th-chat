@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures::stream::StreamExt;
 use futures::FutureExt;
-use genai_types::{messages::Role, Message, MessageContent};
+use genai_types::MessageContent;
 use ratatui::{backend::Backend, Terminal};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
-use crate::config::{Args, CompatibleArgs, LoadingState, LoadingStep, StepStatus};
+use crate::config::{CompatibleArgs, LoadingState, LoadingStep, StepStatus};
 use crate::ui;
 
 /// Current input mode
