@@ -21,13 +21,13 @@ mod ui;
 
 use app::App;
 use config::{Args, Command, CompatibleArgs, SessionAction, CHAT_STATE_ACTOR_MANIFEST};
-use config_manager::{ConfigManager, ConfigLoadOptions};
-use directory::{create_local_th_chat_dir, create_global_th_chat_dir};
-use persistence::{SessionData, session_exists, load_session, save_session, clear_session};
-use session_manager::{SessionManager, SessionInfo};
-use uuid;
 use config_manager::ConversationConfig;
+use config_manager::{ConfigLoadOptions, ConfigManager};
 use directory::ThChatDirectory;
+use directory::{create_global_th_chat_dir, create_local_th_chat_dir};
+use persistence::{clear_session, load_session, save_session, session_exists, SessionData};
+use session_manager::{SessionInfo, SessionManager};
+use uuid;
 
 /// Extended arguments that include loaded configuration
 #[derive(Debug, Clone)]
@@ -66,7 +66,10 @@ impl ExtendedArgs {
             debug: self.debug,
             mcp_config: mcp_config_path,
             no_session: self.no_session,
-            session_dir: self.sessions_directory.as_ref().map(|d| d.sessions_dir.to_string_lossy().to_string()),
+            session_dir: self
+                .sessions_directory
+                .as_ref()
+                .map(|d| d.sessions_dir.to_string_lossy().to_string()),
             clear_session: self.clear_session,
         }
     }
@@ -105,27 +108,31 @@ fn setup_logging() -> Result<()> {
 /// This provides a seamless first-run experience
 async fn auto_initialize_th_chat() -> Result<ThChatDirectory> {
     info!("Auto-initializing .th-chat directory for first-time setup");
-    
+
     // Try local directory first, then fall back to global
     let directory = match create_local_th_chat_dir() {
         Ok(dir) => {
-            info!("Created local .th-chat directory at: {}", dir.root.display());
+            info!(
+                "Created local .th-chat directory at: {}",
+                dir.root.display()
+            );
             dir
         }
         Err(_) => {
             info!("Local directory creation failed, trying global directory");
             create_global_th_chat_dir()
-                .context("Failed to create both local and global .th-chat directories")?        
+                .context("Failed to create both local and global .th-chat directories")?
         }
     };
-    
+
     // Initialize with default configuration
     let config_manager = ConfigManager::new();
-    config_manager.create_default_config(&directory)
+    config_manager
+        .create_default_config(&directory)
         .context("Failed to create default configuration")?;
-    
+
     info!("✅ Auto-initialization complete! Created directories and default configuration.");
-    
+
     Ok(directory)
 }
 
@@ -177,62 +184,66 @@ async fn run_app(
         config_file: args.config.clone(),
         preset: args.preset.clone(),
     };
-    
-    let (conversation_config, config_source) = config_manager.load_config(&config_options)
+
+    let (conversation_config, config_source) = config_manager
+        .load_config(&config_options)
         .context("Failed to load configuration")?;
-    
+
     info!("Using configuration from: {}", config_source);
     debug!("Loaded configuration: {:?}", conversation_config);
-    
+
     // Set up session management (auto-initialize if needed)
     let sessions_dir = match config_manager.get_sessions_directory() {
         Some(dir) => dir.sessions_dir.clone(),
         None => {
             info!("No .th-chat directory found, auto-initializing...");
-            let _directory = auto_initialize_th_chat().await
+            let _directory = auto_initialize_th_chat()
+                .await
                 .context("Failed to auto-initialize .th-chat directory")?;
             let config_manager = ConfigManager::new(); // Refresh after initialization
-            config_manager.get_sessions_directory()
+            config_manager
+                .get_sessions_directory()
                 .context("Failed to find sessions directory after initialization")?
-                .sessions_dir.clone()
+                .sessions_dir
+                .clone()
         }
     };
-    
+
     let session_manager = SessionManager::new(sessions_dir)?;
-    
+
     // Resolve which session to use
-    let session_name = session_manager.resolve_session_name_with_default(
-        args.session.as_deref(), 
-        args.use_default_session
-    );
+    let session_name = session_manager
+        .resolve_session_name_with_default(args.session.as_deref(), args.use_default_session);
     info!("Using session: {}", session_name);
-    
+
     // Load or create session
     let mut session_data = if session_manager.session_exists(&session_name) {
         let mut existing_session = session_manager.load_session(&session_name)?;
-        info!("Loaded existing session '{}' - conversation_id: {}, messages: {}", 
-             existing_session.name, existing_session.conversation_id, existing_session.message_count);
+        info!(
+            "Loaded existing session '{}' - conversation_id: {}, messages: {}",
+            existing_session.name, existing_session.conversation_id, existing_session.message_count
+        );
         existing_session
     } else {
         info!("Creating new session '{}'", session_name);
         // We'll get the actual IDs from the chat-state actor after it starts
         let placeholder_conversation_id = uuid::Uuid::new_v4().to_string();
         let placeholder_store_id = uuid::Uuid::new_v4().to_string();
-        
+
         let mut new_session = session_manager::SessionData::new(
             session_name.clone(),
             placeholder_conversation_id,
             placeholder_store_id,
         );
-        
+
         // Associate with preset if one was used in config loading
         if let Some(preset_name) = &args.preset {
             new_session = new_session.with_preset(preset_name.clone());
         }
-        
+
         new_session
     };
-    
+
     // Create an extended args struct with the loaded configuration
     let extended_args = ExtendedArgs {
         server: args.server.clone(),
@@ -244,7 +255,7 @@ async fn run_app(
         config: conversation_config,
         sessions_directory: config_manager.get_sessions_directory().cloned(),
     };
-    
+
     // Convert to compatible format for existing code
     let compat_args = extended_args.to_compatible_args();
     info!("Starting run_app with server: {}", compat_args.server);
@@ -252,10 +263,12 @@ async fn run_app(
     // Handle session clearing if requested
     if compat_args.clear_session {
         info!("Clearing session '{}'", session_name);
-        if session_manager.session_exists(&session_name) && session_name != SessionManager::default_session_name() {
+        if session_manager.session_exists(&session_name)
+            && session_name != SessionManager::default_session_name()
+        {
             session_manager.delete_session(&session_name)?;
             info!("Session '{}' cleared successfully", session_name);
-            
+
             // Create a new session
             let new_conversation_id = uuid::Uuid::new_v4().to_string();
             let new_store_id = uuid::Uuid::new_v4().to_string();
@@ -271,23 +284,27 @@ async fn run_app(
     app.initialize_loading_steps();
 
     // Step 0: Initialize
-    let init_message = if session_manager.session_exists(&session_name) && !compat_args.clear_session {
-        format!("Resuming session '{}'...", session_name)
-    } else {
-        format!("Initializing new session '{}'...", session_name)
-    };
+    let init_message =
+        if session_manager.session_exists(&session_name) && !compat_args.clear_session {
+            format!("Resuming session '{}'...", session_name)
+        } else {
+            format!("Initializing new session '{}'...", session_name)
+        };
     app.start_loading_step(0, Some(init_message));
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     // Small delay to show the initialization step
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    //    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     app.complete_current_step();
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
 
     // Step 1: Connect to server
-    app.start_loading_step(1, Some(format!("Connecting to Theater server at {}", args.server)));
+    app.start_loading_step(
+        1,
+        Some(format!("Connecting to Theater server at {}", args.server)),
+    );
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     info!("Connecting to Theater server...");
     let mut connection = match chat::ChatManager::connect_to_server(&compat_args).await {
         Ok(conn) => {
@@ -300,7 +317,7 @@ async fn run_app(
             error!("Failed to connect to server: {:?}", e);
             app.fail_current_step(format!("Connection failed: {}", e));
             terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-            
+
             // Give user time to see the error
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             return Err(e);
@@ -308,15 +325,23 @@ async fn run_app(
     };
 
     // Step 2: Start actor
-    app.start_loading_step(2, Some(format!("Starting chat-state actor for session '{}'...", session_name)));
+    app.start_loading_step(
+        2,
+        Some(format!(
+            "Starting chat-state actor for session '{}'...",
+            session_name
+        )),
+    );
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     info!("Starting chat-state actor...");
     let actor_id = match chat::ChatManager::start_actor_with_session(
-        &mut connection, 
-        &compat_args, 
-        Some(&session_data.to_persistence_session_data())
-    ).await {
+        &mut connection,
+        &compat_args,
+        Some(&session_data.to_persistence_session_data()),
+    )
+    .await
+    {
         Ok(id) => {
             info!("Actor started successfully: {:?}", id);
             app.complete_current_step();
@@ -327,23 +352,31 @@ async fn run_app(
             error!("Failed to start actor: {:?}", e);
             app.fail_current_step(format!("Actor initialization failed: {}", e));
             terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-            
+
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             return Err(e);
         }
     };
 
     // Step 3: Open channel
-    app.start_loading_step(3, Some(format!("Opening channel to actor {}", &actor_id.to_string()[..8])));
+    app.start_loading_step(
+        3,
+        Some(format!(
+            "Opening channel to actor {}",
+            &actor_id.to_string()[..8]
+        )),
+    );
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     info!("Opening channel to actor...");
     let mut chat_manager = match chat::ChatManager::open_channel_with_config(
-        connection, 
-        actor_id, 
-        &compat_args, 
-        Some(&extended_args.config)
-    ).await {
+        connection,
+        actor_id,
+        &compat_args,
+        Some(&extended_args.config),
+    )
+    .await
+    {
         Ok(manager) => {
             info!("Channel opened successfully");
             app.complete_current_step();
@@ -354,7 +387,7 @@ async fn run_app(
             error!("Failed to open channel: {:?}", e);
             app.fail_current_step(format!("Channel setup failed: {}", e));
             terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-            
+
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             return Err(e);
         }
@@ -363,17 +396,17 @@ async fn run_app(
     // Step 4: Get actual conversation metadata and update session
     app.start_loading_step(4, Some("Retrieving conversation metadata...".to_string()));
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     match chat_manager.get_metadata().await {
         Ok((conversation_id, store_id)) => {
             // Update session with actual IDs from the actor
             session_data.conversation_id = conversation_id;
             session_data.store_id = store_id;
             session_data.update_access_time();
-            
+
             // Save the updated session
             session_manager.save_session(&session_data)?;
-            
+
             info!("Session metadata updated and saved");
             app.complete_current_step();
         }
@@ -389,7 +422,7 @@ async fn run_app(
     if session_manager.session_exists(&session_name) && !compat_args.clear_session {
         app.start_loading_step(5, Some("Syncing conversation history...".to_string()));
         terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-        
+
         match app.sync_conversation_history(&chat_manager).await {
             Ok(_) => {
                 info!("Conversation history synced successfully");
@@ -414,14 +447,14 @@ async fn run_app(
     // Step 6: Prepare chat interface
     app.start_loading_step(6, Some("Preparing chat interface...".to_string()));
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
-    
+
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     app.complete_current_step();
     terminal.draw(|f| ui::render(f, &mut app, &compat_args))?;
 
     // Final boot completion message
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     // Finish loading
     app.finish_loading();
     info!("Application ready for session '{}'", session_name);
@@ -429,13 +462,14 @@ async fn run_app(
     // Start main application loop with session context
     info!("Starting main application loop");
     let result = run_chat_session(
-        terminal, 
-        &mut app, 
-        &mut chat_manager, 
+        terminal,
+        &mut app,
+        &mut chat_manager,
         &compat_args,
         &session_manager,
-        &mut session_data
-    ).await;
+        &mut session_data,
+    )
+    .await;
 
     match &result {
         Ok(_) => info!("Application loop completed successfully"),
@@ -455,23 +489,19 @@ async fn run_chat_session(
     session_data: &mut session_manager::SessionData,
 ) -> Result<()> {
     info!("Starting chat session loop for '{}'", session_data.name);
-    
+
     // Enhanced app.run that includes session management
-    let result = app.run_with_session_context(
-        terminal,
-        chat_manager,
-        args,
-        session_manager,
-        session_data,
-    ).await;
-    
+    let result = app
+        .run_with_session_context(terminal, chat_manager, args, session_manager, session_data)
+        .await;
+
     // Save final session state before exiting
     if let Err(e) = session_manager.save_session(session_data) {
         warn!("Failed to save final session state: {}", e);
     } else {
         info!("Final session state saved for '{}'", session_data.name);
     }
-    
+
     result
 }
 
@@ -482,17 +512,20 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
         Some(dir) => dir.sessions_dir.clone(),
         None => {
             info!("No .th-chat directory found for session command, auto-initializing...");
-            let _directory = auto_initialize_th_chat().await
+            let _directory = auto_initialize_th_chat()
+                .await
                 .context("Failed to auto-initialize .th-chat directory")?;
             let config_manager = ConfigManager::new(); // Refresh after initialization
-            config_manager.get_sessions_directory()
+            config_manager
+                .get_sessions_directory()
                 .context("Failed to find sessions directory after initialization")?
-                .sessions_dir.clone()
+                .sessions_dir
+                .clone()
         }
     };
-    
+
     let session_manager = SessionManager::new(sessions_dir)?;
-    
+
     match action {
         SessionAction::List { detailed } => {
             let sessions = session_manager.list_sessions()?;
@@ -509,13 +542,17 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
                 }
             }
         }
-        
-        SessionAction::New { name, description, preset } => {
+
+        SessionAction::New {
+            name,
+            description,
+            preset,
+        } => {
             // For now, we'll create a placeholder session. In a real implementation,
             // this would start a new conversation and get the IDs from the chat-state actor
             let conversation_id = uuid::Uuid::new_v4().to_string();
             let store_id = uuid::Uuid::new_v4().to_string();
-            
+
             let session = session_manager.create_session(
                 name,
                 conversation_id,
@@ -523,7 +560,7 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
                 description.clone(),
                 preset.clone(),
             )?;
-            
+
             println!("✅ Created new session '{}'", session.name);
             if let Some(desc) = &session.description {
                 println!("   Description: {}", desc);
@@ -532,70 +569,74 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
                 println!("   Preset: {}", preset_name);
             }
         }
-        
-        SessionAction::Info { name } => {
-            match session_manager.load_session(name) {
-                Ok(session) => {
-                    print_session_info(&session);
-                }
-                Err(_) => {
-                    println!("❌ Session '{}' not found", name);
-                }
+
+        SessionAction::Info { name } => match session_manager.load_session(name) {
+            Ok(session) => {
+                print_session_info(&session);
             }
-        }
-        
+            Err(_) => {
+                println!("❌ Session '{}' not found", name);
+            }
+        },
+
         SessionAction::Delete { name, force } => {
             if name == SessionManager::default_session_name() {
                 println!("❌ Cannot delete the default session");
                 return Ok(());
             }
-            
+
             if !session_manager.session_exists(name) {
                 println!("❌ Session '{}' not found", name);
                 return Ok(());
             }
-            
+
             if !force {
-                print!("Are you sure you want to delete session '{}'? (y/N): ", name);
+                print!(
+                    "Are you sure you want to delete session '{}'? (y/N): ",
+                    name
+                );
                 std::io::Write::flush(&mut std::io::stdout())?;
-                
+
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
-                
+
                 if !input.trim().to_lowercase().starts_with('y') {
                     println!("Cancelled.");
                     return Ok(());
                 }
             }
-            
+
             session_manager.delete_session(name)?;
             println!("🗑️  Deleted session '{}'", name);
         }
-        
+
         SessionAction::Rename { old_name, new_name } => {
             if !session_manager.session_exists(old_name) {
                 println!("❌ Session '{}' not found", old_name);
                 return Ok(());
             }
-            
+
             if session_manager.session_exists(new_name) {
                 println!("❌ Session '{}' already exists", new_name);
                 return Ok(());
             }
-            
+
             session_manager.rename_session(old_name, new_name)?;
             println!("✅ Renamed session '{}' to '{}'", old_name, new_name);
         }
-        
-        SessionAction::Clean { older_than, dry_run } => {
+
+        SessionAction::Clean {
+            older_than,
+            dry_run,
+        } => {
             let days = if let Some(duration_str) = older_than {
                 parse_duration_days(duration_str)?
             } else {
                 30 // Default to 30 days
             };
-            
+
             let deleted = session_manager.clean_sessions(Some(days), *dry_run)?;
-            
+
             if *dry_run {
                 if deleted.is_empty() {
                     println!("No sessions would be deleted.");
@@ -614,7 +655,7 @@ async fn handle_session_command(action: &SessionAction) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -629,11 +670,14 @@ async fn handle_command(command: &Command) -> Result<()> {
                 info!("Creating local .th-chat directory");
                 create_local_th_chat_dir()?
             };
-            
+
             let config_manager = ConfigManager::new();
             config_manager.create_default_config(&directory)?;
-            
-            println!("✅ Initialized .th-chat directory at: {}", directory.root.display());
+
+            println!(
+                "✅ Initialized .th-chat directory at: {}",
+                directory.root.display()
+            );
             println!("📁 Created directories:");
             println!("   - config.json (main configuration)");
             println!("   - sessions/ (conversation sessions)");
@@ -645,11 +689,11 @@ async fn handle_command(command: &Command) -> Result<()> {
             println!();
             println!("🚀 You can now run 'th-chat' to start chatting!");
         }
-        
+
         Command::Presets => {
             let config_manager = ConfigManager::new();
             let presets = config_manager.list_presets()?;
-            
+
             if presets.is_empty() {
                 println!("No presets found. Run 'th-chat init' to create example presets.");
             } else {
@@ -659,41 +703,42 @@ async fn handle_command(command: &Command) -> Result<()> {
                 }
             }
         }
-        
+
         Command::Sessions { action } => {
             handle_session_command(action).await?;
         }
-        
+
         Command::Config { preset } => {
             let config_manager = ConfigManager::new();
             let options = ConfigLoadOptions {
                 config_file: None,
                 preset: preset.clone(),
             };
-            
+
             let (config, source) = config_manager.load_config(&options)?;
-            
+
             println!("Configuration source: {}", source);
             println!();
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
     }
-    
+
     Ok(())
 }
 
 /// Print brief session information
 fn print_session_brief(session: &SessionInfo) {
     let age = format_age(session.age_hours());
-    let preset_info = session.config_preset.as_ref()
+    let preset_info = session
+        .config_preset
+        .as_ref()
         .map(|p| format!(" [{}]", p))
         .unwrap_or_default();
-    
-    println!("  {} ({} messages, {}){}", 
-             session.name, 
-             session.message_count, 
-             age,
-             preset_info);
+
+    println!(
+        "  {} ({} messages, {}){}",
+        session.name, session.message_count, age, preset_info
+    );
 }
 
 /// Print detailed session information
@@ -717,7 +762,10 @@ fn print_session_info(session: &session_manager::SessionData) {
         println!("   Description: {}", desc);
     }
     println!("   Created: {}", format_timestamp(session.created_at));
-    println!("   Last accessed: {}", format_timestamp(session.last_accessed));
+    println!(
+        "   Last accessed: {}",
+        format_timestamp(session.last_accessed)
+    );
     println!("   Messages: {}", session.message_count);
     if let Some(preset) = &session.config_preset {
         println!("   Config preset: {}", preset);
@@ -741,9 +789,9 @@ fn format_age(hours: u64) -> String {
 /// Format Unix timestamp to human-readable string
 fn format_timestamp(timestamp: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let datetime = UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
-    
+
     // Simple formatting - in a real app you might want to use chrono
     match SystemTime::now().duration_since(datetime) {
         Ok(duration) => {
@@ -757,16 +805,20 @@ fn format_timestamp(timestamp: u64) -> String {
 /// Parse duration string like "30d", "7d", "24h" to days
 fn parse_duration_days(duration_str: &str) -> Result<u64> {
     let duration_str = duration_str.trim().to_lowercase();
-    
+
     if let Some(num_str) = duration_str.strip_suffix('d') {
-        let days: u64 = num_str.parse()
+        let days: u64 = num_str
+            .parse()
             .with_context(|| format!("Invalid duration: {}", duration_str))?;
         Ok(days)
     } else if let Some(num_str) = duration_str.strip_suffix('h') {
-        let hours: u64 = num_str.parse()
+        let hours: u64 = num_str
+            .parse()
             .with_context(|| format!("Invalid duration: {}", duration_str))?;
         Ok(hours / 24) // Convert hours to days (rounded down)
     } else {
-        Err(anyhow::anyhow!("Invalid duration format. Use format like '30d' or '24h'"))
+        Err(anyhow::anyhow!(
+            "Invalid duration format. Use format like '30d' or '24h'"
+        ))
     }
 }

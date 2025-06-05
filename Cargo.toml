@@ -32,3 +32,6 @@ mcp-protocol = "0.2.0"
 theater = { path = "/Users/colinrozzi/work/theater/crates/theater" }
 theater-client = { path = "/Users/colinrozzi/work/theater/crates/theater-client" }
 theater-server = { path = "/Users/colinrozzi/work/theater/crates/theater-server" }
+
+[dev-dependencies]
+tempfile = "3.7"

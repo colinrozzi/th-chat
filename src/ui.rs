@@ -368,15 +368,7 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
 /// Render the chat messages area with enhanced tool use support and message navigation
 fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
     let messages_block = Block::default()
-        .borders(Borders::ALL)
-        .title(match app.navigation_mode {
-            NavigationMode::Scroll => "Chat (Scroll Mode)",
-            NavigationMode::Navigate => "Chat (Navigate Mode - j/k to move, c to collapse, v to toggle)",
-        })
-        .title_style(match app.navigation_mode {
-            NavigationMode::Scroll => Style::default().fg(Color::Yellow),
-            NavigationMode::Navigate => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        });
+        .borders(Borders::ALL);
 
     // Calculate available width for text wrapping (subtract borders and padding)
     let available_width = (area.width.saturating_sub(6)) as usize;
@@ -583,15 +575,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
 /// Render the flexible input area that expands with content
 fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let input_block = Block::default()
-        .borders(Borders::ALL)
-        .title(match app.input_mode {
-            InputMode::Normal => "Input (Press 'i' to edit, 'q' to quit, 'h' for help)",
-            InputMode::Editing => "Input (Press Esc to stop editing, Enter for newline, Ctrl+Enter to send)",
-        })
-        .title_style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
-        });
+        .borders(Borders::ALL);
 
     let mut input_text = app.input.clone();
     if app.waiting_for_response {
