@@ -72,35 +72,35 @@ impl LoadingState {
 #[clap(author, version, about)]
 pub struct Args {
     /// Address of the Theater server
-    #[clap(long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
+    #[clap(short = 's', long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
     pub server: String,
 
     /// Use a specific configuration file
-    #[clap(long, value_name = "FILE")]
+    #[clap(short = 'c', long, value_name = "FILE")]
     pub config: Option<std::path::PathBuf>,
 
     /// Use a named preset configuration
-    #[clap(long, value_name = "PRESET")]
+    #[clap(short = 'p', long, value_name = "PRESET")]
     pub preset: Option<String>,
 
     /// Debug mode to print all responses
-    #[clap(long, default_value = "false")]
+    #[clap(short = 'd', long, default_value = "false")]
     pub debug: bool,
 
     /// Disable session persistence (always start a new conversation)
-    #[clap(long, default_value = "false")]
+    #[clap(short = 'N', long, default_value = "false")]
     pub no_session: bool,
 
     /// Clear existing session and start fresh
-    #[clap(long, default_value = "false")]
+    #[clap(short = 'C', long, default_value = "false")]
     pub clear_session: bool,
 
     /// Use specific session
-    #[clap(long, env = "TH_CHAT_SESSION")]
+    #[clap(short = 'S', long, env = "TH_CHAT_SESSION")]
     pub session: Option<String>,
 
     /// Use the default session instead of creating a new auto-incremented session
-    #[clap(long, default_value = "false")]
+    #[clap(short = 'U', long, default_value = "false")]
     pub use_default_session: bool,
 
     /// Subcommands for management operations
@@ -114,7 +114,7 @@ pub enum Command {
     /// Initialize .th-chat directory structure
     Init {
         /// Create global configuration instead of local
-        #[clap(long)]
+        #[clap(short = 'g', long)]
         global: bool,
     },
     /// List available presets
@@ -127,7 +127,7 @@ pub enum Command {
     /// Show resolved configuration
     Config {
         /// Show configuration for specific preset
-        #[clap(long)]
+        #[clap(short = 'p', long)]
         preset: Option<String>,
     },
 }
@@ -138,19 +138,19 @@ pub enum SessionAction {
     /// List all sessions
     List {
         /// Show detailed information
-        #[clap(long)]
+        #[clap(short = 'l', long)]
         detailed: bool,
     },
     /// Create new session
     New {
         /// Session name
-        #[clap(long)]
+        #[clap(short = 'n', long)]
         name: String,
         /// Optional description
-        #[clap(long)]
+        #[clap(short = 'D', long)]
         description: Option<String>,
         /// Associate with config preset
-        #[clap(long)]
+        #[clap(short = 'P', long)]
         preset: Option<String>,
     },
     /// Show session information
@@ -163,7 +163,7 @@ pub enum SessionAction {
         /// Session name
         name: String,
         /// Force deletion without confirmation
-        #[clap(long)]
+        #[clap(short = 'f', long)]
         force: bool,
     },
     /// Rename session
@@ -176,10 +176,10 @@ pub enum SessionAction {
     /// Clean old sessions
     Clean {
         /// Delete sessions older than specified duration (e.g., "30d", "7d")
-        #[clap(long)]
+        #[clap(short = 'o', long)]
         older_than: Option<String>,
         /// Show what would be deleted without actually deleting
-        #[clap(long)]
+        #[clap(short = 'r', long)]
         dry_run: bool,
     },
 }
