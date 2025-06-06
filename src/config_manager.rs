@@ -414,8 +414,8 @@ impl ConfigManager {
             ],
         };
 
-        let research_json = serde_json::to_string_pretty(&research_preset)?;
-        fs::write(directory.preset_file("gemini-2.5-flash"), research_json)?;
+        let gemini_pro_json = serde_json::to_string_pretty(&gemini_pro_preset)?;
+        fs::write(directory.preset_file("gemini-2.5-pro"), gemini_pro_json)?;
 
         debug!("Created example presets: sonnet-4, gemini-2.5-flash");
         Ok(())
