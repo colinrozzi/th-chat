@@ -75,15 +75,20 @@ impl ExtendedArgs {
 }
 
 fn setup_logging() -> Result<()> {
-    // Create logs directory if it doesn't exist
-    std::fs::create_dir_all("logs")?;
+    // Create logs directory if it doesn't exist at $HOME/.th-chat/logs
+    let log_path = dirs::home_dir()
+        .context("Failed to get home directory")?
+        .join(".th-chat")
+        .join("logs");
+
+    std::fs::create_dir_all(&log_path)?;
 
     // overwrite log file if it exists
     let log_file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open("logs/th-chat.log")?;
+        .open(log_path.join("th-chat.log"))?;
 
     // Set up file layer
     let file_layer = fmt::layer()
