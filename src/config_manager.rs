@@ -350,8 +350,8 @@ impl ConfigManager {
             },
             temperature: Some(0.3),
             max_tokens: 8192,
-            system_prompt: Some("You are an expert programmer. Provide clean, well-documented code with explanations. Focus on best practices and maintainable solutions.".to_string()),
-            title: "Coding Session".to_string(),
+            system_prompt: Some("You are pair programming with another developer. You both have access to the filesystem. Make sure you and your pair programmer come to a consensus on the best path forward before committing any changes to the project".to_string()),
+            title: "Sonnet 4 Session".to_string(),
             mcp_servers: vec![
                 McpServer {
                     actor_id: None,
@@ -365,7 +365,7 @@ impl ConfigManager {
         };
 
         let coding_json = serde_json::to_string_pretty(&coding_preset)?;
-        fs::write(directory.preset_file("coding"), coding_json)?;
+        fs::write(directory.preset_file("sonnet-4"), coding_json)?;
 
         // Research preset
         let research_preset = ConversationConfig {
@@ -375,14 +375,14 @@ impl ConfigManager {
             },
             temperature: Some(0.8),
             max_tokens: 65535,
-            system_prompt: Some("You are a research assistant. Provide thorough analysis with multiple perspectives. When possible, suggest sources for further reading.".to_string()),
-            title: "Research Session".to_string(),
+            system_prompt: Some("You are pair programming with another developer. You both have access to the filesystem. Make sure you and your pair programmer come to a consensus on the best path forward before committing any changes to the project".to_string()),
+            title: "Gemini 2.5 Flash Session".to_string(),
             mcp_servers: vec![
                 McpServer {
                     actor_id: None,
                     config: McpConfig {
                         command: "/Users/colinrozzi/work/mcp-servers/simple-fs-mcp/target/release/simple-fs-mcp-server".to_string(),
-                        args: vec!["--allowed-dirs".to_string(), project_dir],
+                        args: vec!["--allowed-dirs".to_string(), project_dir.clone()],
                     },
                     tools: None,
                 }
@@ -390,9 +390,34 @@ impl ConfigManager {
         };
 
         let research_json = serde_json::to_string_pretty(&research_preset)?;
-        fs::write(directory.preset_file("research"), research_json)?;
+        fs::write(directory.preset_file("gemini-2.5-flash"), research_json)?;
 
-        debug!("Created example presets: coding, research");
+        // Research preset
+        let gemini_pro_preset = ConversationConfig {
+            model_config: ModelConfig {
+                model: "gemini-2.5-pro-preview-06-05".to_string(),
+                provider: "google".to_string(),
+            },
+            temperature: Some(0.8),
+            max_tokens: 65535,
+            system_prompt: Some("You are pair programming with another developer. You both have access to the filesystem. Make sure you and your pair programmer come to a consensus on the best path forward before committing any changes to the project".to_string()),
+            title: "Gemini 2.5 Pro Session".to_string(),
+            mcp_servers: vec![
+                McpServer {
+                    actor_id: None,
+                    config: McpConfig {
+                        command: "/Users/colinrozzi/work/mcp-servers/bin/fs-mcp-server".to_string(),
+                        args: vec!["--allowed-dirs".to_string(), project_dir.clone()],
+                    },
+                    tools: None,
+                }
+            ],
+        };
+
+        let research_json = serde_json::to_string_pretty(&research_preset)?;
+        fs::write(directory.preset_file("gemini-2.5-flash"), research_json)?;
+
+        debug!("Created example presets: sonnet-4, gemini-2.5-flash");
         Ok(())
     }
 }
