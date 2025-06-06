@@ -72,7 +72,7 @@ impl LoadingState {
 #[clap(author, version, about)]
 pub struct Args {
     /// Address of the Theater server
-    #[clap(short = 's', long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
+    #[clap(long, env = "THEATER_SERVER_ADDRESS", default_value = "127.0.0.1:9000")]
     pub server: String,
 
     /// Use a specific configuration file
@@ -96,7 +96,7 @@ pub struct Args {
     pub clear_session: bool,
 
     /// Use specific session
-    #[clap(short = 'S', long, env = "TH_CHAT_SESSION")]
+    #[clap(short = 's', long, env = "TH_CHAT_SESSION")]
     pub session: Option<String>,
 
     /// Use the default session instead of creating a new auto-incremented session
