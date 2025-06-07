@@ -12,12 +12,12 @@ use theater::messages::ChannelParticipant;
 use theater::TheaterId;
 use theater_client::TheaterConnection;
 use theater_server::{ManagementCommand, ManagementResponse};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
 use crate::config::{CompatibleArgs, LoadingState, LoadingStep, StepStatus};
-use crate::ui;
+
 
 /// Current input mode
 #[derive(Debug, Clone, PartialEq)]
@@ -46,8 +46,7 @@ pub struct App {
     pub input_cursor_position: usize,
     /// History of recorded messages (for UI compatibility)
     pub messages: Vec<ChatMessage>,
-    /// Current position in the message list
-    pub messages_state: usize,
+
     /// Whether we should quit
     pub should_quit: bool,
     /// Connection status
@@ -58,8 +57,7 @@ pub struct App {
     pub thinking_dots: String,
     /// Last thinking update time
     pub last_thinking_update: Instant,
-    /// Debug mode
-    pub debug: bool,
+
     /// Show help popup
     pub show_help: bool,
     /// Scroll state for messages
@@ -107,13 +105,13 @@ impl Default for App {
             input: String::new(),
             input_cursor_position: 0,
             messages: Vec::new(),
-            messages_state: 0,
+
             should_quit: false,
             connection_status: "Disconnected".to_string(),
             waiting_for_response: false,
             thinking_dots: ".".to_string(),
             last_thinking_update: Instant::now(),
-            debug: false,
+
             show_help: false,
             scroll_state: ratatui::widgets::ScrollbarState::default(),
             vertical_scroll: 0,
@@ -138,7 +136,7 @@ impl Default for App {
 }
 
 impl App {
-    pub fn new(debug: bool) -> Self {
+    pub fn new(_debug: bool) -> Self {
         let loading_steps = vec![
             LoadingStep {
                 message: "Initializing th-chat system".to_string(),
@@ -179,117 +177,12 @@ impl App {
         ];
 
         App {
-            debug,
             loading_steps,
             ..Default::default()
         }
     }
 
     /// Main application loop with chain synchronization
-    pub async fn run<B: Backend>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-        chat_manager: &mut ChatManager,
-        args: &CompatibleArgs,
-    ) -> Result<()> {
-        let server_addr: SocketAddr = args.server.parse().context("Invalid server address")?;
-
-        let mut connection = TheaterConnection::new(server_addr);
-        info!("Attempting to connect to Theater server...");
-        connection
-            .connect()
-            .await
-            .context("Failed to connect to Theater server")?;
-
-        // send the initial messages to the server to listen for head and message updates
-        let message = ManagementCommand::OpenChannel {
-            actor_id: ChannelParticipant::Actor(
-                TheaterId::parse(&chat_manager.actor_id).expect("Invalid actor ID"),
-            ),
-            initial_message: vec![],
-        };
-
-        info!("Sending initial message to server: {:?}", message);
-        connection
-            .send(message)
-            .await
-            .context("Failed to send initial message to Theater server")?;
-
-        self.connection_status = format!("Connected to {}", server_addr);
-
-        let mut reader = EventStream::new();
-
-        loop {
-            // Update animations
-            self.update_thinking_animation();
-            if self.is_loading {
-                self.update_boot_animation();
-            }
-
-            terminal.draw(|f| ui::render(f, self, args))?;
-
-            if self.should_quit {
-                break;
-            }
-            let input_event = reader.next().fuse();
-            tokio::select! {
-                msg = connection.receive().fuse() => {
-                    info!("Received message from server: {:?}", msg);
-
-                    match msg {
-                        Ok(ManagementResponse::ChannelMessage { channel_id, sender_id: _, message }) => {
-                            info!("Received message from channel {}: {:?}", channel_id, message);
-                            if let Ok(payload) = serde_json::from_slice::<ChatStateResponse>(&message) {
-                                let _ = self.process_channel_message(payload);
-                            } else {
-                                error!("Failed to parse message payload");
-                            }
-                        }
-                        Ok(ManagementResponse::ChannelOpened { channel_id, .. }) => {
-                            info!("Channel opened: {}", channel_id);
-                        }
-                        Ok(ManagementResponse::ChannelClosed { .. }) => {
-                            info!("Channel closed by server");
-                            break;
-                        }
-                        Err(e) => {
-                            error!("Error receiving message: {:?}", e);
-                            break;
-                        }
-                        _ => {
-                            error!("Unexpected message type {}", msg.unwrap_err());
-                            break;
-                        }
-                    }
-                }
-
-                event = input_event => {
-                    match event {
-                        Some(Ok(event)) => {
-                            if let Event::Key(key_event) = event {
-                                if let Some(message) = self.handle_key_event(key_event)? {
-                                        chat_manager.send_message(message.clone()).await?;
-                                        chat_manager.request_generation().await?;
-                                }
-                            }
-                        }
-                        Some(Err(e)) => {
-                            error!("Error reading event: {:?}", e);
-                        }
-                        None => {
-                            // Stream closed
-                            error!("Event stream closed");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Cleanup
-        chat_manager.cleanup().await?;
-        Ok(())
-    }
 
     /// Handle a key event and return a message if one should be sent
     fn handle_key_event(
@@ -630,50 +523,7 @@ impl App {
     }
 
     /// Sync with the chat-state actor by fetching new messages from our head to the server's head
-    pub async fn sync_with_chat_state(&mut self, chat_manager: &mut ChatManager) -> Result<()> {
-        info!("Syncing with chat-state actor");
 
-        // Get the current head from the chat-state actor
-        let server_head = chat_manager.get_current_head().await?;
-
-        // If server head is None, there's no conversation yet
-        let Some(server_head) = server_head else {
-            info!("No conversation exists on server yet");
-            return Ok(());
-        };
-
-        // If our client head matches the server head, we're already in sync
-        if self.client_head.as_ref() == Some(&server_head) {
-            debug!("Already in sync with server head: {}", server_head);
-            return Ok(());
-        }
-
-        info!(
-            "Server head: {}, Client head: {:?}",
-            server_head, self.client_head
-        );
-
-        // Fetch new messages from server head back to our client head
-        let new_messages = chat_manager
-            .get_messages_since_head(&server_head, &self.client_head)
-            .await?;
-
-        info!("Fetched {} new messages", new_messages.len());
-
-        // Add new messages to our state
-        for message in new_messages {
-            self.add_message_to_chain(message);
-        }
-
-        // Update our client head
-        self.client_head = Some(server_head);
-
-        info!(
-            "Sync complete. New client head: {}",
-            self.client_head.as_ref().unwrap()
-        );
-        Ok(())
-    }
 
     /// Add a message to the chain, maintaining the linked structure
     fn add_message_to_chain(&mut self, message: ChatMessage) {
@@ -799,15 +649,6 @@ impl App {
         Ok(())
     }
 
-    /// Add a message to the conversation (legacy method for compatibility)
-    pub fn add_message(&mut self, message: ChatMessage) {
-        self.messages.push(message);
-        self.messages_state = self.messages.len().saturating_sub(1);
-        self.update_scroll();
-        // Keep at bottom to show new messages
-        self.auto_scroll_to_bottom();
-    }
-
     /// Update scroll state based on messages
     pub fn update_scroll(&mut self) {
         // The scroll state will be updated in the UI rendering
@@ -914,53 +755,7 @@ impl App {
     }
 
     /// Set the current loading state (legacy compatibility)
-    pub fn set_loading_state(&mut self, state: LoadingState) {
-        self.loading_state = Some(state.clone());
-        self.is_loading = true;
 
-        // Map old loading states to new step system
-        match state {
-            LoadingState::ConnectingToServer(addr) => {
-                self.complete_step_if_current(0); // Complete "Initializing th-chat system"
-                self.start_loading_step(
-                    1,
-                    Some(format!("Connecting to Theater server at {}", addr)),
-                );
-            }
-            LoadingState::StartingActor(manifest) => {
-                self.complete_step_if_current(1); // Complete server connection
-                self.start_loading_step(
-                    2,
-                    Some(format!(
-                        "Loading actor manifest: {}",
-                        manifest.split('/').last().unwrap_or(&manifest)
-                    )),
-                );
-            }
-            LoadingState::OpeningChannel(actor_id) => {
-                self.complete_step_if_current(2); // Complete manifest loading
-                self.start_loading_step(3, None); // Start actor instance
-                self.complete_step_if_current(3); // Complete actor start
-                self.start_loading_step(
-                    4,
-                    Some(format!("Opening channel to actor {}", &actor_id[..8])),
-                );
-            }
-            LoadingState::InitializingMcp(_) => {
-                self.complete_step_if_current(4); // Complete channel opening
-                self.start_loading_step(5, None);
-            }
-            LoadingState::Ready => {
-                // Complete all remaining steps
-                for i in 0..self.loading_steps.len() {
-                    if !matches!(self.loading_steps[i].status, StepStatus::Success) {
-                        self.loading_steps[i].status = StepStatus::Success;
-                    }
-                }
-                self.current_step_index = self.loading_steps.len();
-            }
-        }
-    }
 
     /// Mark loading as finished
     pub fn finish_loading(&mut self) {
@@ -975,17 +770,7 @@ impl App {
     }
 
     /// Update the current loading step status
-    pub fn set_loading_step_status(&mut self, step_index: usize, status: StepStatus) {
-        if step_index < self.loading_steps.len() {
-            let should_advance = matches!(status, StepStatus::Success);
-            self.loading_steps[step_index].status = status;
 
-            // Update current step index to the next pending step
-            if should_advance {
-                self.current_step_index = step_index + 1;
-            }
-        }
-    }
 
     /// Set current step to in-progress and update its message if needed
     pub fn start_loading_step(&mut self, step_index: usize, custom_message: Option<String>) {
@@ -1028,31 +813,9 @@ impl App {
             .all(|step| matches!(step.status, StepStatus::Success))
     }
 
-    /// Helper method for step completion during legacy loading state transitions
-    fn complete_step_if_current(&mut self, step_index: usize) {
-        if self.current_step_index == step_index && step_index < self.loading_steps.len() {
-            self.loading_steps[step_index].status = StepStatus::Success;
-            self.current_step_index += 1;
-        }
-    }
-
-    /// Set waiting for response state
-    pub fn set_waiting(&mut self, waiting: bool) {
-        self.waiting_for_response = waiting;
-        if waiting {
-            self.thinking_dots = ".".to_string();
-            self.last_thinking_update = Instant::now();
-        }
-    }
-
     /// Toggle help popup
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
-    }
-
-    /// Set connection status
-    pub fn set_connection_status(&mut self, status: String) {
-        self.connection_status = status;
     }
 
     /// Toggle between scroll and navigate modes

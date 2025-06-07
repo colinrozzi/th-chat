@@ -196,8 +196,7 @@ pub struct CompatibleArgs {
     pub title: String,
     pub debug: bool,
     pub mcp_config: Option<String>,
-    pub no_session: bool,
-    pub session_dir: Option<String>,
+
     pub clear_session: bool,
 }
 

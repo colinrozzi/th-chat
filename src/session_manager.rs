@@ -53,11 +53,6 @@ impl SessionData {
             .as_secs();
     }
 
-    pub fn increment_message_count(&mut self) {
-        self.message_count += 1;
-        self.update_access_time();
-    }
-
     /// Convert to persistence::SessionData for compatibility with ChatManager
     pub fn to_persistence_session_data(&self) -> crate::persistence::SessionData {
         crate::persistence::SessionData {
@@ -78,11 +73,11 @@ pub struct SessionInfo {
     pub last_accessed: u64,
     pub message_count: u32,
     pub config_preset: Option<String>,
-    pub file_path: PathBuf,
+
 }
 
 impl SessionInfo {
-    pub fn from_session_data(session: &SessionData, file_path: PathBuf) -> Self {
+    pub fn from_session_data(session: &SessionData) -> Self {
         Self {
             name: session.name.clone(),
             description: session.description.clone(),
@@ -90,7 +85,7 @@ impl SessionInfo {
             last_accessed: session.last_accessed,
             message_count: session.message_count,
             config_preset: session.config_preset.clone(),
-            file_path,
+
         }
     }
 
@@ -110,7 +105,6 @@ impl SessionInfo {
 /// Manager for handling multiple chat sessions
 pub struct SessionManager {
     sessions_dir: PathBuf,
-    current_session_name: Option<String>,
 }
 
 impl SessionManager {
@@ -125,7 +119,6 @@ impl SessionManager {
 
         let manager = Self {
             sessions_dir,
-            current_session_name: None,
         };
 
         // Check for legacy session and migrate if needed
@@ -168,7 +161,7 @@ impl SessionManager {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     match self.load_session(stem) {
                         Ok(session_data) => {
-                            sessions.push(SessionInfo::from_session_data(&session_data, path));
+                            sessions.push(SessionInfo::from_session_data(&session_data));
                         },
                         Err(e) => {
                             warn!("Failed to load session '{}': {}", stem, e);
@@ -379,26 +372,6 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Get the session to use based on preferences
-    /// By default, creates a new auto-incremented session (session-1, session-2, etc.)
-    pub fn resolve_session_name(&self, requested_name: Option<&str>) -> String {
-        match requested_name {
-            Some(name) => {
-                if self.session_exists(name) {
-                    name.to_string()
-                } else {
-                    // If explicitly requested session doesn't exist, still use that name
-                    // (it will be created as a new session)
-                    name.to_string()
-                }
-            }
-            None => {
-                // Default behavior: create new auto-incremented session
-                self.next_auto_session_name()
-            }
-        }
-    }
-
     /// Find the next auto-incremented session name based on session count
     /// Simply counts existing session files and adds 1
     pub fn next_auto_session_name(&self) -> String {
@@ -447,13 +420,7 @@ impl SessionManager {
         }
     }
 
-    /// Update session metadata (message count, access time)
-    pub fn update_session_metadata(&self, name: &str) -> Result<()> {
-        let mut session_data = self.load_session(name)?;
-        session_data.increment_message_count();
-        self.save_session(&session_data)?;
-        Ok(())
-    }
+
 }
 
 #[cfg(test)]

@@ -51,35 +51,7 @@ impl ChatMessage {
         }
     }
 
-    /// Get the role of the message
-    pub fn role(&self) -> Role {
-        match &self.entry {
-            ChatEntry::Message(msg) => msg.role.clone(),
-            ChatEntry::Completion(completion) => completion.role.clone(),
-        }
-    }
 
-    /// Create a new ChatMessage from a Message (convenience constructor)
-    pub fn from_message(id: Option<String>, parent_id: Option<String>, message: Message) -> Self {
-        Self {
-            id,
-            parent_id,
-            entry: ChatEntry::Message(message),
-        }
-    }
-
-    /// Create a new ChatMessage from a CompletionResponse (convenience constructor)
-    pub fn from_completion(
-        id: Option<String>,
-        parent_id: Option<String>,
-        completion: CompletionResponse,
-    ) -> Self {
-        Self {
-            id,
-            parent_id,
-            entry: ChatEntry::Completion(completion),
-        }
-    }
 }
 
 /// Response types from the chat-state actor

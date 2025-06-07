@@ -35,8 +35,6 @@ struct ExtendedArgs {
     pub debug: bool,
     pub no_session: bool,
     pub clear_session: bool,
-    pub session: Option<String>,
-    pub use_default_session: bool,
     pub config: ConversationConfig,
     pub sessions_directory: Option<ThChatDirectory>,
 }
@@ -64,11 +62,6 @@ impl ExtendedArgs {
             title: self.config.title.clone(),
             debug: self.debug,
             mcp_config: mcp_config_path,
-            no_session: self.no_session,
-            session_dir: self
-                .sessions_directory
-                .as_ref()
-                .map(|d| d.sessions_dir.to_string_lossy().to_string()),
             clear_session: self.clear_session,
         }
     }
@@ -254,8 +247,7 @@ async fn run_app(
         debug: args.debug,
         no_session: args.no_session,
         clear_session: args.clear_session,
-        session: Some(session_name.clone()),
-        use_default_session: args.use_default_session,
+
         config: conversation_config,
         sessions_directory: config_manager.get_sessions_directory().cloned(),
     };
