@@ -324,8 +324,17 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
 pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     let size = f.area();
 
-    // Calculate available width for input wrapping
-    let input_available_width = (size.width.saturating_sub(4)) as usize;
+    // Create horizontal split - left side for chat, right side for help panel
+    let horizontal_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50), // Left side - chat interface
+            Constraint::Percentage(50), // Right side - help panel
+        ])
+        .split(size);
+
+    // Calculate available width for input wrapping (based on left panel width)
+    let input_available_width = (horizontal_chunks[0].width.saturating_sub(4)) as usize;
 
     // Update cursor position calculation
     app.calculate_cursor_position(input_available_width);
@@ -333,8 +342,8 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     // Calculate input area height dynamically
     let input_height = app.get_input_height();
 
-    // Create main layout with flexible input area
-    let chunks = Layout::default()
+    // Create main layout for left side (chat interface)
+    let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),            // Title bar
@@ -342,21 +351,24 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
             Constraint::Length(input_height), // Input area (flexible)
             Constraint::Length(1),            // Status bar
         ])
-        .split(size);
+        .split(horizontal_chunks[0]);
 
-    // Title bar
-    render_title_bar(f, chunks[0], args);
+    // Title bar (left side)
+    render_title_bar(f, left_chunks[0], args);
 
-    // Chat messages area
-    render_chat_area(f, chunks[1], app);
+    // Chat messages area (left side)
+    render_chat_area(f, left_chunks[1], app);
 
-    // Input area
-    render_flexible_input_area(f, chunks[2], app);
+    // Input area (left side)
+    render_flexible_input_area(f, left_chunks[2], app);
 
-    // Status bar
-    render_status_bar(f, chunks[3], app, args);
+    // Status bar (left side)
+    render_status_bar(f, left_chunks[3], app, args);
 
-    // Help popup (rendered on top if active)
+    // Right side - help panel
+    render_help_panel(f, horizontal_chunks[1], app);
+
+    // Full-screen help popup (rendered on top if active) - overrides split view
     if app.show_help {
         render_help_popup(f, size);
     }
@@ -1017,6 +1029,169 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         .style(Style::default().bg(Color::Black).fg(Color::White))
         .wrap(Wrap { trim: true });
     f.render_widget(help_paragraph, popup_area);
+}
+
+/// Render the help panel on the right side
+fn render_help_panel(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let help_block = Block::default()
+        .title("Available Commands")
+        .borders(Borders::ALL)
+        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(Color::Black));
+
+    // Generate help content based on current mode
+    let help_content = get_mode_specific_help(app);
+
+    let help_paragraph = Paragraph::new(help_content)
+        .block(help_block)
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(help_paragraph, area);
+}
+
+/// Get mode-specific help content
+fn get_mode_specific_help(app: &App) -> Vec<Line> {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            format!("Current Mode: {}", match app.app_mode {
+                AppMode::Input => "INPUT",
+                AppMode::View => "VIEW", 
+                AppMode::Chat => "CHAT",
+            }),
+            Style::default()
+                .fg(match app.app_mode {
+                    AppMode::Input => Color::Yellow,
+                    AppMode::View => Color::Blue,
+                    AppMode::Chat => Color::Magenta,
+                })
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+    ];
+
+    match app.app_mode {
+        AppMode::View => {
+            lines.extend(vec![
+                Line::from(vec![Span::styled(
+                    "VIEW MODE COMMANDS:",
+                    Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from("j/k/↓/↑ - Scroll messages"),
+                Line::from("i - Enter INPUT mode"),
+                Line::from("v - Enter CHAT mode"),
+                Line::from("Enter - Send current input"),
+                Line::from("t - Cycle tool display"),
+                Line::from("T - Auto-collapse tools"),
+                Line::from("h/F1 - Toggle full help"),
+                Line::from("q - Quit application"),
+            ]);
+        }
+        AppMode::Input => {
+            lines.extend(vec![
+                Line::from(vec![Span::styled(
+                    "INPUT MODE COMMANDS:",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from("Esc - Return to VIEW mode"),
+                Line::from("Enter - Insert newline"),
+                Line::from("Ctrl+Enter - Send message"),
+                Line::from("↑/↓ - Navigate lines"),
+                Line::from("Home/End - Line start/end"),
+                Line::from("Ctrl+A - Input start"),
+                Line::from("Ctrl+E - Input end"),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "SPECIAL COMMANDS:",
+                    Style::default().fg(Color::Cyan),
+                )]),
+                Line::from("/help - Show commands"),
+                Line::from("/clear - Clear screen"),
+                Line::from("/debug - Debug info"),
+                Line::from("/status - Connection status"),
+            ]);
+        }
+        AppMode::Chat => {
+            lines.extend(vec![
+                Line::from(vec![Span::styled(
+                    "CHAT MODE COMMANDS:",
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from("Esc - Return to VIEW mode"),
+                Line::from("j/k/↓/↑ - Navigate messages"),
+                Line::from("c - Toggle collapse message"),
+                Line::from("t - Cycle tool display"),
+                Line::from("T - Auto-collapse tools"),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "MESSAGE SELECTION:",
+                    Style::default().fg(Color::Cyan),
+                )]),
+                Line::from("► - Selected message indicator"),
+                Line::from("Background highlighting shown"),
+            ]);
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.extend(vec![
+        Line::from(vec![Span::styled(
+            "TOOL DISPLAY MODES:",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Current: ", Style::default().fg(Color::White)),
+            Span::styled(
+                app.tool_display_mode.display_name(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from("• Minimal - Names only"),
+        Line::from("• Compact - With previews"),
+        Line::from("• Full - Complete details"),
+    ]);
+
+    lines.push(Line::from(""));
+    lines.extend(vec![
+        Line::from(vec![Span::styled(
+            "CONNECTION INFO:",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(Color::White)),
+            Span::styled(
+                &app.connection_status,
+                if app.connection_status == "Connected" {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Messages: ", Style::default().fg(Color::White)),
+            Span::styled(
+                app.messages.len().to_string(),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+    ]);
+
+    if app.waiting_for_response {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            format!("Thinking{}", app.thinking_dots),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )]));
+    }
+
+    lines
 }
 
 /// Helper function to create a centered rect
