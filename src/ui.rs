@@ -324,6 +324,22 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
 pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
     let size = f.area();
 
+    if app.show_split_screen {
+        // Split screen mode - chat on left, help panel on right
+        render_split_screen_layout(f, size, app, args);
+    } else {
+        // Full screen mode - original layout
+        render_full_screen_layout(f, size, app, args);
+    }
+
+    // Full-screen help popup (rendered on top if active) - overrides everything
+    if app.show_help {
+        render_help_popup(f, size);
+    }
+}
+
+/// Render the split screen layout
+fn render_split_screen_layout(f: &mut Frame, size: ratatui::layout::Rect, app: &mut App, args: &CompatibleArgs) {
     // Create horizontal split - left side for chat, right side for help panel
     let horizontal_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -367,11 +383,41 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
 
     // Right side - help panel
     render_help_panel(f, horizontal_chunks[1], app);
+}
 
-    // Full-screen help popup (rendered on top if active) - overrides split view
-    if app.show_help {
-        render_help_popup(f, size);
-    }
+/// Render the full screen layout (original)
+fn render_full_screen_layout(f: &mut Frame, size: ratatui::layout::Rect, app: &mut App, args: &CompatibleArgs) {
+    // Calculate available width for input wrapping (full width)
+    let input_available_width = (size.width.saturating_sub(4)) as usize;
+
+    // Update cursor position calculation
+    app.calculate_cursor_position(input_available_width);
+
+    // Calculate input area height dynamically
+    let input_height = app.get_input_height();
+
+    // Create main layout with flexible input area
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),            // Title bar
+            Constraint::Min(1),               // Chat area (takes remaining space)
+            Constraint::Length(input_height), // Input area (flexible)
+            Constraint::Length(1),            // Status bar
+        ])
+        .split(size);
+
+    // Title bar
+    render_title_bar(f, chunks[0], args);
+
+    // Chat messages area
+    render_chat_area(f, chunks[1], app);
+
+    // Input area
+    render_flexible_input_area(f, chunks[2], app);
+
+    // Status bar
+    render_status_bar(f, chunks[3], app, args);
 }
 
 /// Render the title bar
@@ -909,6 +955,7 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
     );
 
     let tool_mode = format!(" | Tools: {}", app.tool_display_mode.display_name());
+    let split_screen_mode = format!(" | Panel: {}", if app.show_split_screen { "Split" } else { "Full" });
 
     let status_line = Line::from(vec![
         Span::styled(status_base, Style::default().fg(Color::White)),
@@ -917,6 +964,7 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
             Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(tool_mode, Style::default().fg(Color::Cyan)),
+        Span::styled(split_screen_mode, Style::default().fg(Color::Green)),
     ]);
 
     let status_paragraph =
@@ -998,6 +1046,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         )]),
         Line::from("  q          - Quit application"),
         Line::from("  h / F1     - Toggle this help"),
+        Line::from("  s          - Toggle split screen (help panel)"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Commands:",
@@ -1085,6 +1134,7 @@ fn get_mode_specific_help(app: &App) -> Vec<Line> {
                 Line::from("t - Cycle tool display"),
                 Line::from("T - Auto-collapse tools"),
                 Line::from("h/F1 - Toggle full help"),
+                Line::from("s - Toggle split screen"),
                 Line::from("q - Quit application"),
             ]);
         }
@@ -1190,6 +1240,11 @@ fn get_mode_specific_help(app: &App) -> Vec<Line> {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )]));
     }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Press 's' to toggle this panel", Style::default().fg(Color::DarkGray)),
+    ]));
 
     lines
 }

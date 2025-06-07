@@ -112,6 +112,8 @@ pub struct App {
     pub cursor_col: usize,
     /// Tool display mode
     pub tool_display_mode: crate::config::ToolDisplayMode,
+    /// Whether to show the split screen (help panel)
+    pub show_split_screen: bool,
 }
 
 impl Default for App {
@@ -148,6 +150,7 @@ impl Default for App {
             cursor_line: 0,
             cursor_col: 0,
             tool_display_mode: crate::config::ToolDisplayMode::default(),
+            show_split_screen: true, // Default to showing the split screen
         }
     }
 }
@@ -257,6 +260,9 @@ impl App {
                 }
                 KeyCode::F(1) => {
                     self.toggle_help();
+                }
+                KeyCode::Char('s') => {
+                    self.toggle_split_screen();
                 }
                 KeyCode::Enter => {
                     // Submit the message
@@ -861,6 +867,10 @@ impl App {
     /// Toggle help popup
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub fn toggle_split_screen(&mut self) {
+        self.show_split_screen = !self.show_split_screen;
     }
 
 
