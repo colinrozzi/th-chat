@@ -11,8 +11,103 @@ use ratatui::{
 };
 
 use crate::app::{App, InputMode, NavigationMode};
-use crate::config::CompatibleArgs;
+use crate::config::{CompatibleArgs, ToolDisplayMode};
 use genai_types::Message;
+
+/// Create a compact preview of tool input parameters
+fn create_compact_input_preview(input: &serde_json::Value, max_length: usize) -> String {
+    match input {
+        serde_json::Value::Object(obj) => {
+            let mut preview = String::new();
+            let mut first = true;
+            
+            for (key, value) in obj.iter().take(3) { // Show max 3 params
+                if !first {
+                    preview.push_str(", ");
+                }
+                first = false;
+                
+                // Show key and abbreviated value
+                preview.push_str(key);
+                preview.push(':');
+                
+                let value_str = match value {
+                    serde_json::Value::String(s) => {
+                        if s.len() > 20 {
+                            format!("\"{}...\"", &s[..17])
+                        } else {
+                            format!("\"{}\"", s)
+                        }
+                    },
+                    serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
+                    serde_json::Value::Object(obj) => format!("{{{} fields}}", obj.len()),
+                    other => format!("{}", other),
+                };
+                
+                preview.push_str(&value_str);
+                
+                if preview.len() > max_length {
+                    break;
+                }
+            }
+            
+            if obj.len() > 3 {
+                preview.push_str("...");
+            }
+            
+            if preview.len() > max_length {
+                preview.truncate(max_length.saturating_sub(3));
+                preview.push_str("...");
+            }
+            
+            preview
+        },
+        other => {
+            let s = format!("{}", other);
+            if s.len() > max_length {
+                format!("{}...", &s[..max_length.saturating_sub(3)])
+            } else {
+                s
+            }
+        }
+    }
+}
+
+/// Create a compact preview of tool output
+fn create_compact_output_preview(content: &[mcp_protocol::tool::ToolContent], max_length: usize) -> String {
+    if content.is_empty() {
+        return String::new();
+    }
+    
+    // Just preview the first text content for now
+    for tool_content in content.iter().take(1) {
+        match tool_content {
+            mcp_protocol::tool::ToolContent::Text { text } => {
+                let clean_text = text.trim().replace('\n', " ");
+                if clean_text.len() > max_length {
+                    return format!("{}...", &clean_text[..max_length.saturating_sub(3)]);
+                } else {
+                    return clean_text;
+                }
+            },
+            mcp_protocol::tool::ToolContent::Image { mime_type, .. } => {
+                return format!("Image ({})", mime_type);
+            },
+            mcp_protocol::tool::ToolContent::Audio { mime_type, .. } => {
+                return format!("Audio ({})", mime_type);
+            },
+            mcp_protocol::tool::ToolContent::Resource { resource } => {
+                return format!("Resource: {}", resource);
+            },
+        }
+    }
+    
+    String::new()
+}
+
+
+
+
 
 /// Generate a preview text for a collapsed message
 fn get_message_preview(message: &Message, max_length: usize) -> String {
@@ -245,7 +340,7 @@ fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &Compatibl
 }
 
 /// Format a single MessageContent into displayable lines
-fn format_message_content(content: &MessageContent, available_width: usize) -> Vec<Line<'static>> {
+fn format_message_content(content: &MessageContent, available_width: usize, tool_display_mode: &ToolDisplayMode) -> Vec<Line<'static>> {
     match content {
         MessageContent::Text { text } => {
             let wrapped_text = textwrap::fill(text, available_width);
@@ -255,112 +350,173 @@ fn format_message_content(content: &MessageContent, available_width: usize) -> V
                 .collect()
         }
         MessageContent::ToolUse { id, name, input } => {
-            let mut lines = Vec::new();
-            
-            // Tool use header
-            lines.push(Line::from(vec![
-                Span::styled("Tool Use: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            ]));
-            
-            // Tool ID (in a more subtle style)
-            lines.push(Line::from(vec![
-                Span::styled("   ID: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(id.clone(), Style::default().fg(Color::DarkGray)),
-            ]));
-            
-            // Tool input (formatted JSON)
-            let input_str = if input.is_null() {
-                "No parameters".to_string()
-            } else {
-                match serde_json::to_string_pretty(input) {
-                    Ok(formatted) => formatted,
-                    Err(_) => format!("{}", input),
+            match tool_display_mode {
+                ToolDisplayMode::Minimal => {
+                    vec![Line::from(vec![
+                        Span::styled("🔧 ".to_string(), Style::default().fg(Color::Blue)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ])]
                 }
-            };
-            
-            lines.push(Line::from(vec![
-                Span::styled("   Input: ", Style::default().fg(Color::Yellow)),
-            ]));
-            
-            // Wrap and indent the input JSON
-            let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
-            for line in wrapped_input.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled("     ", Style::default()),
-                    Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                ]));
-            }
-            
-            lines
-        }
-        MessageContent::ToolResult { tool_use_id, content, is_error } => {
-            let mut lines = Vec::new();
-            
-            // Tool result header
-            let (prefix, header_style) = if is_error.unwrap_or(false) {
-                ("Tool Result [ERROR]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-            } else {
-                ("Tool Result [OK]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-            };
-            
-            lines.push(Line::from(vec![
-                Span::styled(prefix, header_style),
-            ]));
-            
-            // Tool use ID reference
-            lines.push(Line::from(vec![
-                Span::styled("   For tool ID: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(tool_use_id.clone(), Style::default().fg(Color::DarkGray)),
-            ]));
-            
-            // Tool result content
-            for tool_content in content {
-                match tool_content {
-                    mcp_protocol::tool::ToolContent::Text { text } => {
-                        lines.push(Line::from(vec![
-                            Span::styled("   Output: ", Style::default().fg(Color::Cyan)),
-                        ]));
-                        
-                        let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
-                        for line in wrapped_output.lines() {
+                ToolDisplayMode::Compact => {
+                    let mut lines = vec![Line::from(vec![
+                        Span::styled("🔧 ".to_string(), Style::default().fg(Color::Blue)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ])];
+                    
+                    if !input.is_null() && !input.as_object().map_or(false, |obj| obj.is_empty()) {
+                        let input_preview = create_compact_input_preview(input, available_width.saturating_sub(20));
+                        if !input_preview.is_empty() {
                             lines.push(Line::from(vec![
-                                Span::styled("     ", Style::default()),
-                                Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                                Span::styled("   ".to_string(), Style::default()),
+                                Span::styled("→ ".to_string(), Style::default().fg(Color::DarkGray)),
+                                Span::styled(input_preview, Style::default().fg(Color::Gray)),
                             ]));
                         }
                     }
-                    mcp_protocol::tool::ToolContent::Image { data, mime_type } => {
+                    lines
+                }
+                ToolDisplayMode::Full => {
+                    // Original full display
+                    let mut lines = Vec::new();
+                    
+                    lines.push(Line::from(vec![
+                        Span::styled("Tool Use: ".to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ]));
+                    
+                    lines.push(Line::from(vec![
+                        Span::styled("   ID: ".to_string(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(id.clone(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                    
+                    let input_str = if input.is_null() {
+                        "No parameters".to_string()
+                    } else {
+                        match serde_json::to_string_pretty(input) {
+                            Ok(formatted) => formatted,
+                            Err(_) => format!("{}", input),
+                        }
+                    };
+                    
+                    lines.push(Line::from(vec![
+                        Span::styled("   Input: ".to_string(), Style::default().fg(Color::Yellow)),
+                    ]));
+                    
+                    let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
+                    for line in wrapped_input.lines() {
                         lines.push(Line::from(vec![
-                            Span::styled("   Image: ", Style::default().fg(Color::Cyan)),
-                            Span::styled(
-                                format!("{} ({} bytes)", mime_type, data.len()),
-                                Style::default().fg(Color::White),
-                            ),
+                            Span::styled("     ".to_string(), Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
                         ]));
                     }
-                    mcp_protocol::tool::ToolContent::Audio { data, mime_type } => {
-                        lines.push(Line::from(vec![
-                            Span::styled("   Audio: ", Style::default().fg(Color::Cyan)),
-                            Span::styled(
-                                format!("{} ({} bytes)", mime_type, data.len()),
-                                Style::default().fg(Color::White),
-                            ),
-                        ]));
-                    }
-                    mcp_protocol::tool::ToolContent::Resource { resource } => {
-                        lines.push(Line::from(vec![
-                            Span::styled("   Resource: ", Style::default().fg(Color::Cyan)),
-                            Span::styled(
-                                format!("{}", resource),
-                                Style::default().fg(Color::White),
-                            ),
-                        ]));
-                    }
+                    
+                    lines
                 }
             }
-            
-            lines
+        }
+        MessageContent::ToolResult { tool_use_id, content, is_error } => {
+            let is_error = is_error.unwrap_or(false);
+            match tool_display_mode {
+                ToolDisplayMode::Minimal => {
+                    let (symbol, color) = if is_error {
+                        ("❌", Color::Red)
+                    } else {
+                        ("✅", Color::Green)
+                    };
+                    
+                    vec![Line::from(vec![
+                        Span::styled(symbol.to_string(), Style::default().fg(color)),
+                    ])]
+                }
+                ToolDisplayMode::Compact => {
+                    let (symbol, status_text, color) = if is_error {
+                        ("❌", " ERROR", Color::Red)
+                    } else {
+                        ("✅", " OK", Color::Green)
+                    };
+                    
+                    let mut lines = vec![Line::from(vec![
+                        Span::styled(symbol.to_string(), Style::default().fg(color)),
+                        Span::styled(status_text.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                    ])];
+                    
+                    let output_preview = create_compact_output_preview(content, available_width.saturating_sub(20));
+                    if !output_preview.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled("   ".to_string(), Style::default()),
+                            Span::styled("← ".to_string(), Style::default().fg(Color::DarkGray)),
+                            Span::styled(output_preview, Style::default().fg(Color::Gray)),
+                        ]));
+                    }
+                    lines
+                }
+                ToolDisplayMode::Full => {
+                    // Original full display
+                    let mut lines = Vec::new();
+                    
+                    let (prefix, header_style) = if is_error {
+                        ("Tool Result [ERROR]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                    } else {
+                        ("Tool Result [OK]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                    };
+                    
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix.to_string(), header_style),
+                    ]));
+                    
+                    lines.push(Line::from(vec![
+                        Span::styled("   For tool ID: ".to_string(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(tool_use_id.clone(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                    
+                    for tool_content in content {
+                        match tool_content {
+                            mcp_protocol::tool::ToolContent::Text { text } => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("   Output: ".to_string(), Style::default().fg(Color::Cyan)),
+                                ]));
+                                
+                                let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
+                                for line in wrapped_output.lines() {
+                                    lines.push(Line::from(vec![
+                                        Span::styled("     ".to_string(), Style::default()),
+                                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                                    ]));
+                                }
+                            }
+                            mcp_protocol::tool::ToolContent::Image { data, mime_type } => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("   Image: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        format!("{} ({} bytes)", mime_type, data.len()),
+                                        Style::default().fg(Color::White),
+                                    ),
+                                ]));
+                            }
+                            mcp_protocol::tool::ToolContent::Audio { data, mime_type } => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("   Audio: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        format!("{} ({} bytes)", mime_type, data.len()),
+                                        Style::default().fg(Color::White),
+                                    ),
+                                ]));
+                            }
+                            mcp_protocol::tool::ToolContent::Resource { resource } => {
+                                lines.push(Line::from(vec![
+                                    Span::styled("   Resource: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        format!("{}", resource),
+                                        Style::default().fg(Color::White),
+                                    ),
+                                ]));
+                            }
+                        }
+                    }
+                    
+                    lines
+                }
+            }
         }
     }
 }
@@ -450,7 +606,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
             };
             
             for content in &message.content {
-                let content_lines = format_message_content(content, available_width);
+                let content_lines = format_message_content(content, available_width, &app.tool_display_mode);
                 for line in content_lines {
                     // Apply background highlighting to selected message content
                     let styled_line = if is_selected {
@@ -619,10 +775,12 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
         app.connection_status, args.model, args.provider, app.messages.len()
     );
     
+    let tool_mode = format!(" | Tools: {}", app.tool_display_mode.display_name());
+    
     let status_line = Line::from(vec![
         Span::styled(status_base, Style::default().fg(Color::White)),
         Span::styled(mode_text, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
-        Span::styled(" ", Style::default().fg(Color::White)),
+        Span::styled(tool_mode, Style::default().fg(Color::Cyan)),
     ]);
     
     let status_paragraph = Paragraph::new(vec![status_line])
@@ -657,6 +815,8 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  j / ↓       - Jump to next message"),
         Line::from("  k / ↑       - Jump to previous message"),
         Line::from("  c          - Toggle collapse/expand selected message"),
+        Line::from("  t          - Cycle tool display mode (Minimal → Compact → Full)"),
+        Line::from("  T          - Auto-collapse tool-heavy messages"),
         Line::from("  Selected message shows with ► indicator and highlighting"),
         Line::from(""),
         Line::from(vec![
@@ -670,6 +830,13 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  Home/End   - Move to start/end of line"),
         Line::from("  Ctrl+A     - Move to start of input"),
         Line::from("  Ctrl+E     - Move to end of input"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Tool Display:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+        ]),
+        Line::from("  Minimal    - Just show tool names and status symbols"),
+        Line::from("  Compact    - Show tool names with input/output previews"),
+        Line::from("  Full       - Show complete tool details (traditional)"),
         Line::from(""),
         Line::from(vec![
             Span::styled("General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))

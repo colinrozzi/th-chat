@@ -96,6 +96,8 @@ pub struct App {
     pub cursor_line: usize,
     /// Column position on the current line (0-based)
     pub cursor_col: usize,
+    /// Tool display mode
+    pub tool_display_mode: crate::config::ToolDisplayMode,
 }
 
 impl Default for App {
@@ -131,6 +133,7 @@ impl Default for App {
             input_lines: 1,
             cursor_line: 0,
             cursor_col: 0,
+            tool_display_mode: crate::config::ToolDisplayMode::default(),
         }
     }
 }
@@ -239,6 +242,14 @@ impl App {
                     if self.navigation_mode == NavigationMode::Navigate {
                         self.toggle_message_collapse();
                     }
+                }
+                KeyCode::Char('t') => {
+                    // Cycle tool display mode
+                    self.cycle_tool_display_mode();
+                }
+                KeyCode::Char('T') => {
+                    // Auto-collapse tool-heavy messages
+                    self.auto_collapse_tool_messages();
                 }
                 KeyCode::Char('h') => {
                     self.toggle_help();
@@ -1119,5 +1130,35 @@ impl App {
         // Cleanup
         chat_manager.cleanup().await?;
         Ok(())
+    }
+
+    /// Cycle tool display mode
+    pub fn cycle_tool_display_mode(&mut self) {
+        self.tool_display_mode = self.tool_display_mode.cycle();
+        // Could add a status message here later if needed
+        info!("Tool display mode changed to: {}", self.tool_display_mode.display_name());
+    }
+
+    /// Auto-collapse tool-heavy messages
+    pub fn auto_collapse_tool_messages(&mut self) {
+        let mut collapsed_count = 0;
+        for (index, message) in self.messages.iter().enumerate() {
+            let tool_count = message.as_message().content.iter()
+                .filter(|content| matches!(content, 
+                    genai_types::MessageContent::ToolUse { .. } | 
+                    genai_types::MessageContent::ToolResult { .. }
+                ))
+                .count();
+            
+            // Auto-collapse messages with 3+ tool calls
+            if tool_count >= 3 && !self.collapsed_messages.contains(&index) {
+                self.collapsed_messages.insert(index);
+                collapsed_count += 1;
+            }
+        }
+        
+        if collapsed_count > 0 {
+            info!("Auto-collapsed {} tool-heavy messages", collapsed_count);
+        }
     }
 }

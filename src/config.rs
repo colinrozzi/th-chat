@@ -1,6 +1,41 @@
 use clap::Parser;
 use ratatui;
 
+/// Configuration for tool display modes
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolDisplayMode {
+    /// Show only tool name and status (most compact)
+    Minimal,
+    /// Show tool name, truncated input/output (default)
+    Compact,
+    /// Show everything (current behavior)
+    Full,
+}
+
+impl Default for ToolDisplayMode {
+    fn default() -> Self {
+        ToolDisplayMode::Compact
+    }
+}
+
+impl ToolDisplayMode {
+    pub fn cycle(&self) -> Self {
+        match self {
+            ToolDisplayMode::Minimal => ToolDisplayMode::Compact,
+            ToolDisplayMode::Compact => ToolDisplayMode::Full,
+            ToolDisplayMode::Full => ToolDisplayMode::Minimal,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ToolDisplayMode::Minimal => "Minimal",
+            ToolDisplayMode::Compact => "Compact",
+            ToolDisplayMode::Full => "Full",
+        }
+    }
+}
+
 /// Individual loading step with status
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadingStep {
