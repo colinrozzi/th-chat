@@ -4,8 +4,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        Wrap,
+        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
     },
     Frame,
 };
@@ -20,17 +19,18 @@ fn create_compact_input_preview(input: &serde_json::Value, max_length: usize) ->
         serde_json::Value::Object(obj) => {
             let mut preview = String::new();
             let mut first = true;
-            
-            for (key, value) in obj.iter().take(3) { // Show max 3 params
+
+            for (key, value) in obj.iter().take(3) {
+                // Show max 3 params
                 if !first {
                     preview.push_str(", ");
                 }
                 first = false;
-                
+
                 // Show key and abbreviated value
                 preview.push_str(key);
                 preview.push(':');
-                
+
                 let value_str = match value {
                     serde_json::Value::String(s) => {
                         if s.len() > 20 {
@@ -38,30 +38,30 @@ fn create_compact_input_preview(input: &serde_json::Value, max_length: usize) ->
                         } else {
                             format!("\"{}\"", s)
                         }
-                    },
+                    }
                     serde_json::Value::Array(arr) => format!("[{} items]", arr.len()),
                     serde_json::Value::Object(obj) => format!("{{{} fields}}", obj.len()),
                     other => format!("{}", other),
                 };
-                
+
                 preview.push_str(&value_str);
-                
+
                 if preview.len() > max_length {
                     break;
                 }
             }
-            
+
             if obj.len() > 3 {
                 preview.push_str("...");
             }
-            
+
             if preview.len() > max_length {
                 preview.truncate(max_length.saturating_sub(3));
                 preview.push_str("...");
             }
-            
+
             preview
-        },
+        }
         other => {
             let s = format!("{}", other);
             if s.len() > max_length {
@@ -74,11 +74,14 @@ fn create_compact_input_preview(input: &serde_json::Value, max_length: usize) ->
 }
 
 /// Create a compact preview of tool output
-fn create_compact_output_preview(content: &[mcp_protocol::tool::ToolContent], max_length: usize) -> String {
+fn create_compact_output_preview(
+    content: &[mcp_protocol::tool::ToolContent],
+    max_length: usize,
+) -> String {
     if content.is_empty() {
         return String::new();
     }
-    
+
     // Just preview the first text content for now
     for tool_content in content.iter().take(1) {
         match tool_content {
@@ -89,30 +92,26 @@ fn create_compact_output_preview(content: &[mcp_protocol::tool::ToolContent], ma
                 } else {
                     return clean_text;
                 }
-            },
+            }
             mcp_protocol::tool::ToolContent::Image { mime_type, .. } => {
                 return format!("Image ({})", mime_type);
-            },
+            }
             mcp_protocol::tool::ToolContent::Audio { mime_type, .. } => {
                 return format!("Audio ({})", mime_type);
-            },
+            }
             mcp_protocol::tool::ToolContent::Resource { resource } => {
                 return format!("Resource: {}", resource);
-            },
+            }
         }
     }
-    
+
     String::new()
 }
-
-
-
-
 
 /// Generate a preview text for a collapsed message
 fn get_message_preview(message: &Message, max_length: usize) -> String {
     let mut preview = String::new();
-    
+
     for content in &message.content {
         match content {
             MessageContent::Text { text } => {
@@ -127,9 +126,13 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
                 if !preview.is_empty() {
                     preview.push_str(" ");
                 }
-                preview.push_str(&format!("[Tool: {}]", name));
+                preview.push_str(&format!("[{}]", name));
             }
-            MessageContent::ToolResult { tool_use_id, is_error, .. } => {
+            MessageContent::ToolResult {
+                tool_use_id,
+                is_error,
+                ..
+            } => {
                 if !preview.is_empty() {
                     preview.push_str(" ");
                 }
@@ -146,19 +149,19 @@ fn get_message_preview(message: &Message, max_length: usize) -> String {
                 preview.push_str(&format!("[Tool Result {}: {}]", status, id_preview));
             }
         }
-        
+
         // Stop if we're getting too long
         if preview.len() > max_length {
             break;
         }
     }
-    
+
     // Truncate and add ellipsis if needed
     if preview.len() > max_length {
         preview.truncate(max_length.saturating_sub(3));
         preview.push_str("...");
     }
-    
+
     if preview.is_empty() {
         "[Empty message]".to_string()
     } else {
@@ -178,11 +181,11 @@ pub fn render(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
 /// Render the Linux boot-style loading screen
 pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
     let area = f.area();
-    
+
     // Clear the entire screen with black background
     let background = Block::default().style(Style::default().bg(Color::Black));
     f.render_widget(background, area);
-    
+
     // Create a simple layout - we want to start from the top-left like a real boot
     let main_area = ratatui::layout::Rect {
         x: 1,
@@ -190,27 +193,33 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
-    
+
     // Boot header - show system info like real Linux boot
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("th-chat ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "th-chat ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("v0.1.0", Style::default().fg(Color::White)),
             Span::styled(" starting up...", Style::default().fg(Color::Gray)),
         ]),
         Line::from(""),
     ];
-    
+
     // Add each loading step with Linux-style formatting
     for (i, step) in app.loading_steps.iter().enumerate() {
         let is_current = i == app.current_step_index;
-        
+
         // Create the line with proper spacing
         let status_symbol = step.status.symbol();
         let status_color = step.status.color();
-        
+
         // For current step in progress, add blinking cursor effect
-        let message = if is_current && matches!(step.status, crate::config::StepStatus::InProgress) {
+        let message = if is_current && matches!(step.status, crate::config::StepStatus::InProgress)
+        {
             if app.boot_cursor_visible {
                 format!("{}...", step.message)
             } else {
@@ -219,45 +228,63 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
         } else {
             step.message.clone()
         };
-        
+
         let line = Line::from(vec![
-            Span::styled(format!("{:<50}", message), Style::default().fg(Color::White)),
-            Span::styled(status_symbol, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:<50}", message),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                status_symbol,
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]);
-        
+
         lines.push(line);
-        
+
         // Add error details if step failed
         if let crate::config::StepStatus::Failed(error) = &step.status {
             lines.push(Line::from(vec![
-                Span::styled("  Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  Error: ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(error, Style::default().fg(Color::Red)),
             ]));
             lines.push(Line::from(""));
         }
     }
-    
+
     // Add some spacing
     lines.push(Line::from(""));
-    
+
     // Add system information like real Linux boot
     if app.is_loading_complete() {
         lines.push(Line::from(vec![
-            Span::styled("System ready. Starting chat interface", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            if app.boot_cursor_visible { 
-                Span::styled(".", Style::default().fg(Color::Green)) 
-            } else { 
-                Span::styled(" ", Style::default()) 
-            }
+            Span::styled(
+                "System ready. Starting chat interface",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            if app.boot_cursor_visible {
+                Span::styled(".", Style::default().fg(Color::Green))
+            } else {
+                Span::styled(" ", Style::default())
+            },
         ]));
     } else if app.current_step_index < app.loading_steps.len() {
         // Show a kernel-style progress indicator
-        let progress = (app.current_step_index as f32 / app.loading_steps.len() as f32 * 100.0) as u8;
-        lines.push(Line::from(vec![
-            Span::styled(format!("Progress: {}%", progress), Style::default().fg(Color::Yellow)),
-        ]));
+        let progress =
+            (app.current_step_index as f32 / app.loading_steps.len() as f32 * 100.0) as u8;
+        lines.push(Line::from(vec![Span::styled(
+            format!("Progress: {}%", progress),
+            Style::default().fg(Color::Yellow),
+        )]));
     }
-    
+
     // Bottom status line - like Linux boot messages
     let footer_y = area.height.saturating_sub(3);
     let footer_area = ratatui::layout::Rect {
@@ -266,25 +293,30 @@ pub fn render_loading_screen(f: &mut Frame, app: &App, _args: &CompatibleArgs) {
         width: area.width.saturating_sub(2),
         height: 1,
     };
-    
-    let footer_line = if app.loading_steps.iter().any(|s| matches!(s.status, crate::config::StepStatus::Failed(_))) {
-        Line::from(vec![
-            Span::styled("Boot failed. Press Ctrl+C to exit.", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        ])
+
+    let footer_line = if app
+        .loading_steps
+        .iter()
+        .any(|s| matches!(s.status, crate::config::StepStatus::Failed(_)))
+    {
+        Line::from(vec![Span::styled(
+            "Boot failed. Press Ctrl+C to exit.",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )])
     } else {
-        Line::from(vec![
-            Span::styled("Press Ctrl+C to abort startup", Style::default().fg(Color::DarkGray)),
-        ])
+        Line::from(vec![Span::styled(
+            "Press Ctrl+C to abort startup",
+            Style::default().fg(Color::DarkGray),
+        )])
     };
-    
+
     // Render the main boot text
-    let paragraph = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Black));
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(Color::Black));
     f.render_widget(paragraph, main_area);
-    
+
     // Render the footer
-    let footer_paragraph = Paragraph::new(vec![footer_line])
-        .style(Style::default().bg(Color::Black));
+    let footer_paragraph =
+        Paragraph::new(vec![footer_line]).style(Style::default().bg(Color::Black));
     f.render_widget(footer_paragraph, footer_area);
 }
 
@@ -294,21 +326,21 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
 
     // Calculate available width for input wrapping
     let input_available_width = (size.width.saturating_sub(4)) as usize;
-    
+
     // Update cursor position calculation
     app.calculate_cursor_position(input_available_width);
-    
+
     // Calculate input area height dynamically
     let input_height = app.get_input_height();
-    
+
     // Create main layout with flexible input area
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),              // Title bar
-            Constraint::Min(1),                 // Chat area (takes remaining space)
-            Constraint::Length(input_height),   // Input area (flexible)
-            Constraint::Length(1),              // Status bar
+            Constraint::Length(1),            // Title bar
+            Constraint::Min(1),               // Chat area (takes remaining space)
+            Constraint::Length(input_height), // Input area (flexible)
+            Constraint::Length(1),            // Status bar
         ])
         .split(size);
 
@@ -334,13 +366,21 @@ pub fn render_chat_screen(f: &mut Frame, app: &mut App, args: &CompatibleArgs) {
 fn render_title_bar(f: &mut Frame, area: ratatui::layout::Rect, args: &CompatibleArgs) {
     let title = format!("th-chat - {}", args.title);
     let title_paragraph = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .alignment(Alignment::Center);
     f.render_widget(title_paragraph, area);
 }
 
 /// Format a single MessageContent into displayable lines
-fn format_message_content(content: &MessageContent, available_width: usize, tool_display_mode: &ToolDisplayMode) -> Vec<Line<'static>> {
+fn format_message_content(
+    content: &MessageContent,
+    available_width: usize,
+    tool_display_mode: &ToolDisplayMode,
+) -> Vec<Line<'static>> {
     match content {
         MessageContent::Text { text } => {
             let wrapped_text = textwrap::fill(text, available_width);
@@ -352,23 +392,31 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
         MessageContent::ToolUse { id, name, input } => {
             match tool_display_mode {
                 ToolDisplayMode::Minimal => {
-                    vec![Line::from(vec![
-                        Span::styled("🔧 ".to_string(), Style::default().fg(Color::Blue)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    ])]
+                    vec![Line::from(vec![Span::styled(
+                        name.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )])]
                 }
                 ToolDisplayMode::Compact => {
-                    let mut lines = vec![Line::from(vec![
-                        Span::styled("🔧 ".to_string(), Style::default().fg(Color::Blue)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    ])];
-                    
+                    let mut lines = vec![Line::from(vec![Span::styled(
+                        name.clone(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )])];
+
                     if !input.is_null() && !input.as_object().map_or(false, |obj| obj.is_empty()) {
-                        let input_preview = create_compact_input_preview(input, available_width.saturating_sub(20));
+                        let input_preview =
+                            create_compact_input_preview(input, available_width.saturating_sub(20));
                         if !input_preview.is_empty() {
                             lines.push(Line::from(vec![
                                 Span::styled("   ".to_string(), Style::default()),
-                                Span::styled("→ ".to_string(), Style::default().fg(Color::DarkGray)),
+                                Span::styled(
+                                    "→ ".to_string(),
+                                    Style::default().fg(Color::DarkGray),
+                                ),
                                 Span::styled(input_preview, Style::default().fg(Color::Gray)),
                             ]));
                         }
@@ -378,17 +426,27 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                 ToolDisplayMode::Full => {
                     // Original full display
                     let mut lines = Vec::new();
-                    
+
                     lines.push(Line::from(vec![
-                        Span::styled("Tool Use: ".to_string(), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "Tool Use: ".to_string(),
+                            Style::default()
+                                .fg(Color::Magenta)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            name.clone(),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ]));
-                    
+
                     lines.push(Line::from(vec![
                         Span::styled("   ID: ".to_string(), Style::default().fg(Color::DarkGray)),
                         Span::styled(id.clone(), Style::default().fg(Color::DarkGray)),
                     ]));
-                    
+
                     let input_str = if input.is_null() {
                         "No parameters".to_string()
                     } else {
@@ -397,50 +455,58 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                             Err(_) => format!("{}", input),
                         }
                     };
-                    
-                    lines.push(Line::from(vec![
-                        Span::styled("   Input: ".to_string(), Style::default().fg(Color::Yellow)),
-                    ]));
-                    
-                    let wrapped_input = textwrap::fill(&input_str, available_width.saturating_sub(6));
+
+                    lines.push(Line::from(vec![Span::styled(
+                        "   Input: ".to_string(),
+                        Style::default().fg(Color::Yellow),
+                    )]));
+
+                    let wrapped_input =
+                        textwrap::fill(&input_str, available_width.saturating_sub(6));
                     for line in wrapped_input.lines() {
                         lines.push(Line::from(vec![
                             Span::styled("     ".to_string(), Style::default()),
                             Span::styled(line.to_string(), Style::default().fg(Color::White)),
                         ]));
                     }
-                    
+
                     lines
                 }
             }
         }
-        MessageContent::ToolResult { tool_use_id, content, is_error } => {
+        MessageContent::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => {
             let is_error = is_error.unwrap_or(false);
             match tool_display_mode {
                 ToolDisplayMode::Minimal => {
                     let (symbol, color) = if is_error {
-                        ("❌", Color::Red)
+                        ("[ERROR]", Color::Red)
                     } else {
-                        ("✅", Color::Green)
+                        ("[✓]", Color::Green)
                     };
-                    
-                    vec![Line::from(vec![
-                        Span::styled(symbol.to_string(), Style::default().fg(color)),
-                    ])]
+
+                    vec![Line::from(vec![Span::styled(
+                        symbol.to_string(),
+                        Style::default().fg(color),
+                    )])]
                 }
                 ToolDisplayMode::Compact => {
-                    let (symbol, status_text, color) = if is_error {
-                        ("❌", " ERROR", Color::Red)
+                    let (symbol, _status_text, color) = if is_error {
+                        ("[ERROR]", "", Color::Red)
                     } else {
-                        ("✅", " OK", Color::Green)
+                        ("[✓]", "", Color::Green)
                     };
-                    
-                    let mut lines = vec![Line::from(vec![
-                        Span::styled(symbol.to_string(), Style::default().fg(color)),
-                        Span::styled(status_text.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                    ])];
-                    
-                    let output_preview = create_compact_output_preview(content, available_width.saturating_sub(20));
+
+                    let mut lines = vec![Line::from(vec![Span::styled(
+                        symbol.to_string(),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    )])];
+
+                    let output_preview =
+                        create_compact_output_preview(content, available_width.saturating_sub(20));
                     if !output_preview.is_empty() {
                         lines.push(Line::from(vec![
                             Span::styled("   ".to_string(), Style::default()),
@@ -453,40 +519,60 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                 ToolDisplayMode::Full => {
                     // Original full display
                     let mut lines = Vec::new();
-                    
+
                     let (prefix, header_style) = if is_error {
-                        ("Tool Result [ERROR]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        (
+                            "Tool Result [ERROR]",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )
                     } else {
-                        ("Tool Result [OK]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                        (
+                            "Tool Result [✓]",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     };
-                    
+
+                    lines.push(Line::from(vec![Span::styled(
+                        prefix.to_string(),
+                        header_style,
+                    )]));
+
                     lines.push(Line::from(vec![
-                        Span::styled(prefix.to_string(), header_style),
-                    ]));
-                    
-                    lines.push(Line::from(vec![
-                        Span::styled("   For tool ID: ".to_string(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            "   For tool ID: ".to_string(),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(tool_use_id.clone(), Style::default().fg(Color::DarkGray)),
                     ]));
-                    
+
                     for tool_content in content {
                         match tool_content {
                             mcp_protocol::tool::ToolContent::Text { text } => {
-                                lines.push(Line::from(vec![
-                                    Span::styled("   Output: ".to_string(), Style::default().fg(Color::Cyan)),
-                                ]));
-                                
-                                let wrapped_output = textwrap::fill(text, available_width.saturating_sub(6));
+                                lines.push(Line::from(vec![Span::styled(
+                                    "   Output: ".to_string(),
+                                    Style::default().fg(Color::Cyan),
+                                )]));
+
+                                let wrapped_output =
+                                    textwrap::fill(text, available_width.saturating_sub(6));
                                 for line in wrapped_output.lines() {
                                     lines.push(Line::from(vec![
                                         Span::styled("     ".to_string(), Style::default()),
-                                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                                        Span::styled(
+                                            line.to_string(),
+                                            Style::default().fg(Color::White),
+                                        ),
                                     ]));
                                 }
                             }
                             mcp_protocol::tool::ToolContent::Image { data, mime_type } => {
                                 lines.push(Line::from(vec![
-                                    Span::styled("   Image: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        "   Image: ".to_string(),
+                                        Style::default().fg(Color::Cyan),
+                                    ),
                                     Span::styled(
                                         format!("{} ({} bytes)", mime_type, data.len()),
                                         Style::default().fg(Color::White),
@@ -495,7 +581,10 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                             }
                             mcp_protocol::tool::ToolContent::Audio { data, mime_type } => {
                                 lines.push(Line::from(vec![
-                                    Span::styled("   Audio: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        "   Audio: ".to_string(),
+                                        Style::default().fg(Color::Cyan),
+                                    ),
                                     Span::styled(
                                         format!("{} ({} bytes)", mime_type, data.len()),
                                         Style::default().fg(Color::White),
@@ -504,7 +593,10 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                             }
                             mcp_protocol::tool::ToolContent::Resource { resource } => {
                                 lines.push(Line::from(vec![
-                                    Span::styled("   Resource: ".to_string(), Style::default().fg(Color::Cyan)),
+                                    Span::styled(
+                                        "   Resource: ".to_string(),
+                                        Style::default().fg(Color::Cyan),
+                                    ),
                                     Span::styled(
                                         format!("{}", resource),
                                         Style::default().fg(Color::White),
@@ -513,7 +605,7 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
                             }
                         }
                     }
-                    
+
                     lines
                 }
             }
@@ -523,33 +615,38 @@ fn format_message_content(content: &MessageContent, available_width: usize, tool
 
 /// Render the chat messages area with enhanced tool use support and message navigation
 fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
-    let messages_block = Block::default()
-        .borders(Borders::ALL);
+    let messages_block = Block::default().borders(Borders::ALL);
 
     // Calculate available width for text wrapping (subtract borders and padding)
     let available_width = (area.width.saturating_sub(6)) as usize;
-    
+
     // Flatten all messages into renderable items with proper line counting
     let mut all_items = Vec::new();
     let selected_message_index = app.get_selected_message_index();
-    
+
     for (msg_index, chat_msg) in app.messages.iter().enumerate() {
         let message = chat_msg.as_message();
         let mut role_style = match message.role {
-            Role::User => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            Role::Assistant => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-            Role::System => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Role::User => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            Role::Assistant => Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+            Role::System => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         };
-        
+
         // Highlight selected message
         let is_selected = selected_message_index == Some(msg_index);
         if is_selected {
             role_style = role_style.bg(Color::White).fg(Color::Black);
         }
-        
+
         // Create a simple header without role prefix or model info
         let header_text = "".to_string();
-        
+
         // Add message selection indicator (only for non-empty headers)
         if !header_text.is_empty() {
             let header_with_indicator = if is_selected {
@@ -557,13 +654,16 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
             } else {
                 format!("  {}", header_text)
             };
-            
-            all_items.push(ListItem::new(Line::from(Span::styled(header_with_indicator, role_style))));
+
+            all_items.push(ListItem::new(Line::from(Span::styled(
+                header_with_indicator,
+                role_style,
+            ))));
         }
-        
+
         // Process each content item in the message
         let is_collapsed = app.is_message_collapsed(msg_index);
-        
+
         if is_collapsed {
             // Show collapsed message as a single line with preview and left border
             let preview_text = get_message_preview(&message, 60);
@@ -577,18 +677,27 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 Role::Assistant => Color::Blue,
                 Role::System => Color::Yellow,
             };
-            
+
             let collapsed_line = if is_selected {
                 Line::from(vec![
-                    Span::styled(border_char, Style::default().fg(border_color).bg(Color::DarkGray)),
-                    Span::styled(" [COLLAPSED] ", Style::default().fg(Color::DarkGray).bg(Color::DarkGray)),
-                    Span::styled(preview_text, Style::default().fg(Color::DarkGray).bg(Color::DarkGray))
+                    Span::styled(
+                        border_char,
+                        Style::default().fg(border_color).bg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        " [COLLAPSED] ",
+                        Style::default().fg(Color::DarkGray).bg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        preview_text,
+                        Style::default().fg(Color::DarkGray).bg(Color::DarkGray),
+                    ),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled(border_char, Style::default().fg(border_color)),
                     Span::styled(" [COLLAPSED] ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(preview_text, Style::default().fg(Color::Gray))
+                    Span::styled(preview_text, Style::default().fg(Color::Gray)),
                 ])
             };
             all_items.push(ListItem::new(collapsed_line));
@@ -604,36 +713,43 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 Role::Assistant => Color::Blue,
                 Role::System => Color::Yellow,
             };
-            
+
             for content in &message.content {
-                let content_lines = format_message_content(content, available_width, &app.tool_display_mode);
+                let content_lines =
+                    format_message_content(content, available_width, &app.tool_display_mode);
                 for line in content_lines {
                     // Apply background highlighting to selected message content
                     let styled_line = if is_selected {
-                        Line::from(vec![
-                            Span::styled(border_char, Style::default().fg(border_color).bg(Color::DarkGray)),
-                            Span::styled(" ", Style::default().bg(Color::DarkGray)),
-                        ].into_iter().chain(
-                            line.spans.into_iter()
-                                .map(|span| Span::styled(
-                                    span.content,
-                                    span.style.bg(Color::DarkGray)
-                                ))
-                        ).collect::<Vec<_>>())
+                        Line::from(
+                            vec![
+                                Span::styled(
+                                    border_char,
+                                    Style::default().fg(border_color).bg(Color::DarkGray),
+                                ),
+                                Span::styled(" ", Style::default().bg(Color::DarkGray)),
+                            ]
+                            .into_iter()
+                            .chain(line.spans.into_iter().map(|span| {
+                                Span::styled(span.content, span.style.bg(Color::DarkGray))
+                            }))
+                            .collect::<Vec<_>>(),
+                        )
                     } else {
-                        Line::from(vec![
-                            Span::styled(border_char, Style::default().fg(border_color)),
-                            Span::styled(" ", Style::default()),
-                        ].into_iter().chain(
-                            line.spans.into_iter()
-                                .map(|span| span)
-                        ).collect::<Vec<_>>())
+                        Line::from(
+                            vec![
+                                Span::styled(border_char, Style::default().fg(border_color)),
+                                Span::styled(" ", Style::default()),
+                            ]
+                            .into_iter()
+                            .chain(line.spans.into_iter().map(|span| span))
+                            .collect::<Vec<_>>(),
+                        )
                     };
                     all_items.push(ListItem::new(styled_line));
                 }
             }
         }
-        
+
         // Add model and token usage info for completions (only for non-collapsed messages)
         if !is_collapsed {
             if let Some(completion) = chat_msg.as_completion() {
@@ -649,7 +765,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
-                
+
                 // Define border char and color for metadata line
                 let border_char = match message.role {
                     Role::User => "│",
@@ -666,22 +782,22 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
                 } else {
                     Style::default().fg(border_color)
                 };
-                
+
                 all_items.push(ListItem::new(Line::from(vec![
                     Span::styled(border_char, border_style),
                     Span::styled(" ", usage_style),
-                    Span::styled(usage_text, usage_style)
+                    Span::styled(usage_text, usage_style),
                 ])));
             }
         }
-        
+
         // Add spacing between messages
         all_items.push(ListItem::new(Line::from("")));
     }
 
     let total_lines = all_items.len();
     let available_height = area.height.saturating_sub(2) as usize; // subtract borders
-    
+
     // Calculate which items to show based on scroll
     let start_index = if total_lines <= available_height {
         // All content fits, no scrolling needed
@@ -693,7 +809,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
         let max_scroll = total_lines.saturating_sub(available_height);
         max_scroll.saturating_sub(app.vertical_scroll)
     };
-    
+
     let end_index = (start_index + available_height).min(total_lines);
 
     // Take the visible slice of items
@@ -708,7 +824,8 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
 
     // Update scroll state for scrollbar
     if total_lines > available_height {
-        app.scroll_state = app.scroll_state
+        app.scroll_state = app
+            .scroll_state
             .content_length(total_lines)
             .position(start_index);
     }
@@ -730,8 +847,7 @@ fn render_chat_area(f: &mut Frame, area: ratatui::layout::Rect, app: &mut App) {
 
 /// Render the flexible input area that expands with content
 fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let input_block = Block::default()
-        .borders(Borders::ALL);
+    let input_block = Block::default().borders(Borders::ALL);
 
     let mut input_text = app.input.clone();
     if app.waiting_for_response {
@@ -763,28 +879,34 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
         NavigationMode::Scroll => "SCROLL",
         NavigationMode::Navigate => "NAVIGATE",
     };
-    
+
     let mode_color = match app.navigation_mode {
         NavigationMode::Scroll => Color::Yellow,
         NavigationMode::Navigate => Color::Magenta,
     };
-    
+
     // Create spans with different colors for the mode
     let status_base = format!(
         " Status: {} | Model: {} | Provider: {} | Messages: {} | Mode: ",
-        app.connection_status, args.model, args.provider, app.messages.len()
+        app.connection_status,
+        args.model,
+        args.provider,
+        app.messages.len()
     );
-    
+
     let tool_mode = format!(" | Tools: {}", app.tool_display_mode.display_name());
-    
+
     let status_line = Line::from(vec![
         Span::styled(status_base, Style::default().fg(Color::White)),
-        Span::styled(mode_text, Style::default().fg(mode_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            mode_text,
+            Style::default().fg(mode_color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(tool_mode, Style::default().fg(Color::Cyan)),
     ]);
-    
-    let status_paragraph = Paragraph::new(vec![status_line])
-        .style(Style::default().bg(Color::DarkGray));
+
+    let status_paragraph =
+        Paragraph::new(vec![status_line]).style(Style::default().bg(Color::DarkGray));
     f.render_widget(status_paragraph, area);
 }
 
@@ -792,26 +914,34 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args
 fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
     let popup_area = centered_rect(80, 90, area);
     f.render_widget(Clear, popup_area);
-    
+
     let help_text = vec![
-        Line::from(vec![
-            Span::styled("th-chat Help", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "th-chat Help",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Navigation Modes:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "Navigation Modes:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  v          - Toggle between Scroll and Navigate modes"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Scroll Mode (default):", Style::default().fg(Color::Green))
-        ]),
+        Line::from(vec![Span::styled(
+            "Scroll Mode (default):",
+            Style::default().fg(Color::Green),
+        )]),
         Line::from("  j / ↓       - Scroll down through chat"),
         Line::from("  k / ↑       - Scroll up through chat"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Navigate Mode:", Style::default().fg(Color::Magenta))
-        ]),
+        Line::from(vec![Span::styled(
+            "Navigate Mode:",
+            Style::default().fg(Color::Magenta),
+        )]),
         Line::from("  j / ↓       - Jump to next message"),
         Line::from("  k / ↑       - Jump to previous message"),
         Line::from("  c          - Toggle collapse/expand selected message"),
@@ -819,9 +949,12 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  T          - Auto-collapse tool-heavy messages"),
         Line::from("  Selected message shows with ► indicator and highlighting"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Input Mode:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "Input Mode:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  i          - Enter input mode"),
         Line::from("  Esc        - Exit input mode"),
         Line::from("  Enter      - Insert newline"),
@@ -831,27 +964,37 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("  Ctrl+A     - Move to start of input"),
         Line::from("  Ctrl+E     - Move to end of input"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Tool Display:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "Tool Display:",
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  Minimal    - Just show tool names and status symbols"),
         Line::from("  Compact    - Show tool names with input/output previews"),
         Line::from("  Full       - Show complete tool details (traditional)"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("General:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "General:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  q          - Quit application"),
         Line::from("  h / F1     - Toggle this help"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Commands:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-        ]),
+        Line::from(vec![Span::styled(
+            "Commands:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
         Line::from("  /help /clear /debug /status  (type in input area)"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Tips:", Style::default().fg(Color::Cyan))
-        ]),
+        Line::from(vec![Span::styled(
+            "Tips:",
+            Style::default().fg(Color::Cyan),
+        )]),
         Line::from("  Input area expands automatically with content"),
         Line::from("  Use Ctrl+Enter to send multi-line messages"),
         Line::from(""),
@@ -872,7 +1015,11 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
 }
 
 /// Helper function to create a centered rect
-fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
