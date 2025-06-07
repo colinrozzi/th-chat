@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, InputMode, NavigationMode};
+use crate::app::{App, AppMode};
 use crate::config::{CompatibleArgs, ToolDisplayMode};
 use genai_types::Message;
 
@@ -855,9 +855,9 @@ fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &
     }
 
     let input_paragraph = Paragraph::new(input_text)
-        .style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
+        .style(match app.app_mode {
+            AppMode::Input => Style::default().fg(Color::Yellow),
+            _ => Style::default(),
         })
         .block(input_block)
         .wrap(Wrap { trim: false }); // Don't trim for proper multi-line handling
@@ -865,7 +865,7 @@ fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &
     f.render_widget(input_paragraph, area);
 
     // Set cursor position when editing (accounting for multi-line)
-    if app.input_mode == InputMode::Editing && !app.waiting_for_response {
+    if app.app_mode.is_input() && !app.waiting_for_response {
         f.set_cursor_position((
             area.x + app.cursor_col as u16 + 1,
             area.y + app.cursor_line as u16 + 1,
@@ -875,14 +875,16 @@ fn render_flexible_input_area(f: &mut Frame, area: ratatui::layout::Rect, app: &
 
 /// Render the status bar
 fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect, app: &App, args: &CompatibleArgs) {
-    let mode_text = match app.navigation_mode {
-        NavigationMode::Scroll => "SCROLL",
-        NavigationMode::Navigate => "NAVIGATE",
+    let mode_text = match app.app_mode {
+        AppMode::Input => "INPUT",
+        AppMode::View => "VIEW",
+        AppMode::Chat => "CHAT",
     };
 
-    let mode_color = match app.navigation_mode {
-        NavigationMode::Scroll => Color::Yellow,
-        NavigationMode::Navigate => Color::Magenta,
+    let mode_color = match app.app_mode {
+        AppMode::Input => Color::Yellow,
+        AppMode::View => Color::Blue,
+        AppMode::Chat => Color::Magenta,
     };
 
     // Create spans with different colors for the mode
@@ -924,30 +926,22 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Navigation Modes:",
+            "Application Modes:",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  v          - Toggle between Scroll and Navigate modes"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Scroll Mode (default):",
-            Style::default().fg(Color::Green),
+            "View Mode (default):",
+            Style::default().fg(Color::Blue),
         )]),
-        Line::from("  j / ↓       - Scroll down through chat"),
-        Line::from("  k / ↑       - Scroll up through chat"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Navigate Mode:",
-            Style::default().fg(Color::Magenta),
-        )]),
-        Line::from("  j / ↓       - Jump to next message"),
-        Line::from("  k / ↑       - Jump to previous message"),
-        Line::from("  c          - Toggle collapse/expand selected message"),
-        Line::from("  t          - Cycle tool display mode (Minimal → Compact → Full)"),
-        Line::from("  T          - Auto-collapse tool-heavy messages"),
-        Line::from("  Selected message shows with ► indicator and highlighting"),
+        Line::from("  j / k / ↓ / ↑ - Scroll through conversation"),
+        Line::from("  i           - Enter Input mode to compose messages"),
+        Line::from("  v           - Enter Chat mode for message operations"),
+        Line::from("  Enter       - Send current input (if any)"),
+        Line::from("  t           - Cycle tool display mode"),
+        Line::from("  T           - Auto-collapse tool-heavy messages"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Input Mode:",
@@ -955,14 +949,24 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  i          - Enter input mode"),
-        Line::from("  Esc        - Exit input mode"),
-        Line::from("  Enter      - Insert newline"),
-        Line::from("  Ctrl+Enter - Send message"),
-        Line::from("  ↑/↓        - Navigate between lines"),
-        Line::from("  Home/End   - Move to start/end of line"),
-        Line::from("  Ctrl+A     - Move to start of input"),
-        Line::from("  Ctrl+E     - Move to end of input"),
+        Line::from("  Esc         - Return to View mode"),
+        Line::from("  Enter       - Insert newline"),
+        Line::from("  Ctrl+Enter  - Send message"),
+        Line::from("  ↑/↓         - Navigate between lines"),
+        Line::from("  Home/End    - Move to start/end of line"),
+        Line::from("  Ctrl+A      - Move to start of input"),
+        Line::from("  Ctrl+E      - Move to end of input"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Chat Mode:",
+            Style::default().fg(Color::Magenta),
+        )]),
+        Line::from("  Esc         - Return to View mode"),
+        Line::from("  j / k / ↓ / ↑ - Navigate between messages"),
+        Line::from("  c           - Toggle collapse/expand selected message"),
+        Line::from("  t           - Cycle tool display mode"),
+        Line::from("  T           - Auto-collapse tool-heavy messages"),
+        Line::from("  Selected message shows with ► indicator and highlighting"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Tool Display:",
@@ -997,6 +1001,7 @@ fn render_help_popup(f: &mut Frame, area: ratatui::layout::Rect) {
         )]),
         Line::from("  Input area expands automatically with content"),
         Line::from("  Use Ctrl+Enter to send multi-line messages"),
+        Line::from("  Mode shown in status bar: INPUT | VIEW | CHAT"),
         Line::from(""),
         Line::from("Press h/F1 or Esc to close this help"),
     ];

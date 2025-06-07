@@ -19,27 +19,42 @@ use crate::chat::{ChatManager, ChatMessage, ChatStateResponse};
 use crate::config::{CompatibleArgs, LoadingState, LoadingStep, StepStatus};
 
 
-/// Current input mode
+/// Current application mode
 #[derive(Debug, Clone, PartialEq)]
-pub enum InputMode {
-    Normal,
-    Editing,
+pub enum AppMode {
+    /// Input mode - editing messages
+    Input,
+    /// View mode - scrolling through conversation
+    View,
+    /// Chat mode - navigating and operating on individual messages
+    Chat,
 }
 
-/// Message navigation state
-#[derive(Debug, Clone, PartialEq)]
-pub enum NavigationMode {
-    /// Normal scrolling mode (existing behavior)
-    Scroll,
-    /// Message navigation mode (vim-style j/k navigation)
-    Navigate,
+impl Default for AppMode {
+    fn default() -> Self {
+        AppMode::View
+    }
+}
+
+impl AppMode {
+    pub fn is_input(&self) -> bool {
+        matches!(self, AppMode::Input)
+    }
+    
+    pub fn is_view(&self) -> bool {
+        matches!(self, AppMode::View)
+    }
+    
+    pub fn is_chat(&self) -> bool {
+        matches!(self, AppMode::Chat)
+    }
 }
 
 /// Application state
 #[derive(Debug)]
 pub struct App {
-    /// Current input mode
-    pub input_mode: InputMode,
+    /// Current application mode
+    pub app_mode: AppMode,
     /// Current value of the input box
     pub input: String,
     /// Current input cursor position
@@ -82,8 +97,7 @@ pub struct App {
     pub boot_cursor_visible: bool,
     /// Last boot animation update
     pub last_boot_update: Instant,
-    /// Current navigation mode
-    pub navigation_mode: NavigationMode,
+
     /// Index of currently selected message (when in Navigate mode)
     pub selected_message_index: Option<usize>,
     /// Whether to show message selection highlighting
@@ -103,7 +117,7 @@ pub struct App {
 impl Default for App {
     fn default() -> App {
         App {
-            input_mode: InputMode::Normal,
+            app_mode: AppMode::default(),
             input: String::new(),
             input_cursor_position: 0,
             messages: Vec::new(),
@@ -126,7 +140,7 @@ impl Default for App {
             current_step_index: 0,
             boot_cursor_visible: true,
             last_boot_update: Instant::now(),
-            navigation_mode: NavigationMode::Scroll,
+
             selected_message_index: None,
             show_message_selection: false,
             collapsed_messages: std::collections::HashSet::new(),
@@ -207,41 +221,28 @@ impl App {
             return Ok(None);
         }
 
-        match self.input_mode {
-            InputMode::Normal => match key_event.code {
+        match self.app_mode {
+            AppMode::View => match key_event.code {
                 KeyCode::Char('q') => {
                     self.should_quit = true;
                 }
                 KeyCode::Char('i') => {
-                    self.input_mode = InputMode::Editing;
+                    self.app_mode = AppMode::Input;
                 }
-                // Vim-style navigation
-                KeyCode::Char('j') => match self.navigation_mode {
-                    NavigationMode::Scroll => self.scroll_down(),
-                    NavigationMode::Navigate => self.navigate_message_down(),
-                },
-                KeyCode::Char('k') => match self.navigation_mode {
-                    NavigationMode::Scroll => self.scroll_up(),
-                    NavigationMode::Navigate => self.navigate_message_up(),
-                },
-                // Toggle between scroll and navigate modes
                 KeyCode::Char('v') => {
-                    self.toggle_navigation_mode();
-                }
-                // Traditional arrow key navigation (still works in scroll mode)
-                KeyCode::Up => match self.navigation_mode {
-                    NavigationMode::Scroll => self.scroll_up(),
-                    NavigationMode::Navigate => self.navigate_message_up(),
-                },
-                KeyCode::Down => match self.navigation_mode {
-                    NavigationMode::Scroll => self.scroll_down(),
-                    NavigationMode::Navigate => self.navigate_message_down(),
-                },
-                KeyCode::Char('c') => {
-                    // Toggle collapse/expand for selected message (only in Navigate mode)
-                    if self.navigation_mode == NavigationMode::Navigate {
-                        self.toggle_message_collapse();
+                    self.app_mode = AppMode::Chat;
+                    self.show_message_selection = true;
+                    // Start at the most recent message
+                    if !self.messages.is_empty() {
+                        self.selected_message_index = Some(self.messages.len() - 1);
                     }
+                }
+                // Vim-style navigation (scrolling in view mode)
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.scroll_down();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.scroll_up();
                 }
                 KeyCode::Char('t') => {
                     // Cycle tool display mode
@@ -265,7 +266,7 @@ impl App {
                 }
                 _ => {}
             },
-            InputMode::Editing => match key_event.code {
+            AppMode::Input => match key_event.code {
                 // Ctrl+Enter to send message (instead of just Enter)
                 // Regular Enter for newline
                 KeyCode::Enter => {
@@ -310,7 +311,40 @@ impl App {
                     self.move_cursor_to_line_end();
                 }
                 KeyCode::Esc => {
-                    self.input_mode = InputMode::Normal;
+                    self.app_mode = AppMode::View;
+                }
+                _ => {}
+            },
+            AppMode::Chat => match key_event.code {
+                KeyCode::Esc => {
+                    self.app_mode = AppMode::View;
+                    self.show_message_selection = false;
+                    self.selected_message_index = None;
+                }
+                // Vim-style navigation (message navigation)
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.navigate_message_down();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.navigate_message_up();
+                }
+                KeyCode::Char('c') => {
+                    // Toggle collapse/expand for selected message
+                    self.toggle_message_collapse();
+                }
+                KeyCode::Char('t') => {
+                    // Cycle tool display mode
+                    self.cycle_tool_display_mode();
+                }
+                KeyCode::Char('T') => {
+                    // Auto-collapse tool-heavy messages
+                    self.auto_collapse_tool_messages();
+                }
+                KeyCode::Char('h') => {
+                    self.toggle_help();
+                }
+                KeyCode::F(1) => {
+                    self.toggle_help();
                 }
                 _ => {}
             },
@@ -829,28 +863,11 @@ impl App {
         self.show_help = !self.show_help;
     }
 
-    /// Toggle between scroll and navigate modes
-    pub fn toggle_navigation_mode(&mut self) {
-        match self.navigation_mode {
-            NavigationMode::Scroll => {
-                self.navigation_mode = NavigationMode::Navigate;
-                self.show_message_selection = true;
-                // Start at the most recent message
-                if !self.messages.is_empty() {
-                    self.selected_message_index = Some(self.messages.len() - 1);
-                }
-            }
-            NavigationMode::Navigate => {
-                self.navigation_mode = NavigationMode::Scroll;
-                self.show_message_selection = false;
-                self.selected_message_index = None;
-            }
-        }
-    }
+
 
     /// Navigate to previous message (vim k)
     pub fn navigate_message_up(&mut self) {
-        if self.navigation_mode == NavigationMode::Navigate && !self.messages.is_empty() {
+        if self.app_mode.is_chat() && !self.messages.is_empty() {
             match self.selected_message_index {
                 Some(index) if index > 0 => {
                     self.selected_message_index = Some(index - 1);
@@ -868,7 +885,7 @@ impl App {
 
     /// Navigate to next message (vim j)  
     pub fn navigate_message_down(&mut self) {
-        if self.navigation_mode == NavigationMode::Navigate && !self.messages.is_empty() {
+        if self.app_mode.is_chat() && !self.messages.is_empty() {
             match self.selected_message_index {
                 Some(index) if index < self.messages.len() - 1 => {
                     self.selected_message_index = Some(index + 1);
